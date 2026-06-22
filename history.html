@@ -222,7 +222,9 @@ function metricVal(v) {
 
 // a run's medal-buff % only if it's a valid non-negative integer, else null.
 function pctOf(run) {
-  const p = run ? Number(run.medalPct) : NaN;
+  const v = run ? run.medalPct : undefined;
+  if (v === null || v === undefined || v === "") return null;   // not set (Number(null)===0, so don't coerce)
+  const p = Number(v);
   return (Number.isInteger(p) && p >= 0) ? p : null;
 }
 // effective medals/min multiplier (1 when there's no valid buff).
@@ -233,6 +235,23 @@ function medalMult(run) {
 
 function saveStore() {
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(store)); } catch (e) {}
+}
+
+// Apply the Medal % field to the selected run and persist it immediately (on every
+// keystroke), so it survives a reload even without blurring. `commit` (blur/Enter)
+// also normalizes the field text.
+function applyMedalEdit(commit) {
+  const run = selectedRun();
+  if (!run) return;
+  const v = String(document.getElementById("medalPct").value).trim();
+  const p = v === "" ? null : parseInt(v, 10);
+  run.medalPct = (p !== null && Number.isFinite(p) && p >= 0) ? p : null;
+  saveStore();
+  const m = medalMult(run);
+  document.getElementById("medalMult").textContent = m !== 1 ? "×" + (Math.round(m * 100) / 100) : "";
+  drawChart();
+  renderSummary();
+  if (commit) syncMedalInput(run);
 }
 
 function drawChart() {
@@ -358,11 +377,11 @@ function drawChart() {
   }
 
   // peak marker + value on each line (the run's max for that metric)
-  const peakX = {};
+  const peaks = {};
   for (const s of series) {
     const peak = s.points.reduce((b, p) => (p.y > b.y ? p : b), s.points[0]);
     s.peak = peak;
-    peakX[s.key] = peak.x;
+    peaks[s.key] = peak;
     const px = xPix(peak.x), py = yPix(peak.y, s.axis);
     ctx.strokeStyle = s.color; ctx.lineWidth = 2.5;
     ctx.beginPath(); ctx.arc(px, py, 6, 0, Math.PI * 2); ctx.stroke();
@@ -385,7 +404,7 @@ function drawChart() {
       t: Number(s.t) || 0, x: (Number(s.t) || 0) / 60,
       mpm: metricVal(s.mpm) * mult, wpm: metricVal(s.wpm), wave: metricVal(s.wave), rec: s.rec
     })),
-    peakX, xPix, yPix, padL, padR, padT, plotH, plotW, cssW, cssH
+    peaks, xPix, yPix, padL, padR, padT, plotH, plotW, cssW, cssH
   };
 }
 
@@ -421,9 +440,15 @@ function showTooltip(row) {
   const dot = c => `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${c};margin-right:5px"></span>`;
   let html = `<div style="opacity:.75;margin-bottom:3px">⏱ ${fmtClock(row.t)}` +
     (row.rec === "rebirth" ? '  <span style="color:#ff6b6b">rebirth advised</span>' : "") + `</div>`;
-  const peakTag = key => (g.peakX && row.x === g.peakX[key]) ? ' <span style="opacity:.85">◆ max</span>' : "";
-  html += `<div>${dot("#ffe08a")}Medals/min: <b>${Number.isFinite(row.mpm) ? fmtMedals(row.mpm) : "-"}</b>${peakTag("mpm")}</div>`;
-  html += `<div>${dot("#6bb8ff")}Waves/min: <b>${Number.isFinite(row.wpm) ? fmtNum(row.wpm) : "-"}</b>${peakTag("wpm")}</div>`;
+  const maxInfo = (key, val, fmt) => {
+    const pk = g.peaks && g.peaks[key];
+    if (!pk || !Number.isFinite(val)) return "";
+    if (val === pk.y) return ' <span style="opacity:.85">◆ max</span>';
+    const dAbs = val - pk.y, dPct = pk.y ? Math.round((dAbs / pk.y) * 100) : 0;
+    return ` <span style="opacity:.6">(${dPct}% · ${dAbs < 0 ? "-" : "+"}${fmt(Math.abs(dAbs))} vs max)</span>`;
+  };
+  html += `<div>${dot("#ffe08a")}Medals/min: <b>${Number.isFinite(row.mpm) ? fmtMedals(row.mpm) : "-"}</b>${maxInfo("mpm", row.mpm, fmtMedals)}</div>`;
+  html += `<div>${dot("#6bb8ff")}Waves/min: <b>${Number.isFinite(row.wpm) ? fmtNum(row.wpm) : "-"}</b>${maxInfo("wpm", row.wpm, fmtNum)}</div>`;
   if (Number.isFinite(row.wave)) html += `<div style="opacity:.7;margin-top:2px">Wave ${row.wave}</div>`;
   tip.innerHTML = html;
   tip.style.display = "block";
@@ -547,17 +572,8 @@ function clearAll() {
 
 // ---------- wire up ----------
 document.getElementById("runSelect").addEventListener("change", e => { selectedRunId = e.target.value; syncMedalInput(selectedRun()); drawChart(); });
-document.getElementById("medalPct").addEventListener("change", e => {
-  const run = selectedRun();
-  if (!run) return;
-  const v = String(e.target.value).trim();
-  const p = v === "" ? null : parseInt(v, 10);
-  run.medalPct = (p !== null && Number.isFinite(p) && p >= 0) ? p : null;
-  saveStore();
-  syncMedalInput(run);
-  drawChart();
-  renderSummary();
-});
+document.getElementById("medalPct").addEventListener("input", () => applyMedalEdit(false));
+document.getElementById("medalPct").addEventListener("change", () => applyMedalEdit(true));
 document.getElementById("refreshBtn").addEventListener("click", () => { load(); render(); });
 document.getElementById("csvBtn").addEventListener("click", exportCsv);
 document.getElementById("jsonBtn").addEventListener("click", exportJson);
