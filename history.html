@@ -165,6 +165,22 @@ function fmtNum(v) {
   return parseFloat(scaled.toFixed(2)) + (suffixes[tier] || ("e" + tier * 3));
 }
 
+// EF2 magnitude notation for medals: 10^3 = A, 10^6 = B, 10^9 = C, ... Z, then AA, AB, ...
+function tierLetters(n) {
+  let s = "";
+  while (n > 0) { n -= 1; s = String.fromCharCode(65 + (n % 26)) + s; n = Math.floor(n / 26); }
+  return s;
+}
+function fmtMedals(v) {
+  if (!Number.isFinite(v)) return "-";
+  let scaled = v, tier = 0;
+  while (scaled >= 1000) { scaled /= 1000; tier += 1; }
+  let r = Math.round(scaled * 100) / 100;
+  if (r >= 1000) { r /= 1000; tier += 1; }   // rounding / float drift pushed it into the next tier
+  if (tier === 0) return r.toString();
+  return parseFloat(r.toFixed(2)) + tierLetters(tier);
+}
+
 function fmtRunLabel(run) {
   const d = new Date(run.startedAtWall || 0);
   const stamp = isNaN(d.getTime()) ? "run " + run.id : d.toLocaleString();
@@ -288,7 +304,7 @@ function drawChart() {
     ctx.beginPath(); ctx.moveTo(padL, py); ctx.lineTo(cssW - padR, py); ctx.stroke();
     if (haveLeft) {
       ctx.fillStyle = leftColor; ctx.textAlign = "right";
-      ctx.fillText(fmtNum(axisMax.left * frac), padL - 8, py);
+      ctx.fillText(fmtMedals(axisMax.left * frac), padL - 8, py);
     }
     if (haveRight) {
       ctx.fillStyle = rightColor; ctx.textAlign = "left";
@@ -388,7 +404,7 @@ function showTooltip(row) {
   const dot = c => `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${c};margin-right:5px"></span>`;
   let html = `<div style="opacity:.75;margin-bottom:3px">⏱ ${fmtClock(row.t)}` +
     (row.rec === "rebirth" ? '  <span style="color:#ff6b6b">rebirth advised</span>' : "") + `</div>`;
-  html += `<div>${dot("#ffe08a")}Medals/min: <b>${Number.isFinite(row.mpm) ? fmtNum(row.mpm) : "-"}</b></div>`;
+  html += `<div>${dot("#ffe08a")}Medals/min: <b>${Number.isFinite(row.mpm) ? fmtMedals(row.mpm) : "-"}</b></div>`;
   html += `<div>${dot("#6bb8ff")}Waves/min: <b>${Number.isFinite(row.wpm) ? fmtNum(row.wpm) : "-"}</b></div>`;
   if (Number.isFinite(row.wave)) html += `<div style="opacity:.7;margin-top:2px">Wave ${row.wave}</div>`;
   tip.innerHTML = html;
@@ -435,7 +451,7 @@ function renderSummary() {
       <td>${isNaN(d.getTime()) ? "-" : d.toLocaleString()}</td>
       <td>${dur}</td>
       <td>${run.peakWave ?? "-"}</td>
-      <td>${fmtNum(Number(run.bestMpm) * medalMult(run))}</td>
+      <td>${fmtMedals(Number(run.bestMpm) * medalMult(run))}</td>
       <td>${pctOf(run) != null ? pctOf(run) + "%" : "-"}</td>
       <td>${samples.length}</td>
     </tr>`;
