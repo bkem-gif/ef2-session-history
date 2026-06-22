@@ -34,7 +34,7 @@
   }
   .group { display: flex; align-items: center; gap: 6px; }
   .group > .lbl { opacity: 0.7; }
-  select, button {
+  select, button, input {
     background: rgba(255, 224, 138, 0.08);
     color: #ffe08a;
     border: 1px solid rgba(255, 224, 138, 0.4);
@@ -90,6 +90,11 @@
       <span class="lbl">Run</span>
       <select id="runSelect"></select>
     </div>
+    <div class="group">
+      <span class="lbl">Medal&nbsp;%</span>
+      <input id="medalPct" type="number" min="0" step="1" inputmode="numeric" placeholder="0" style="width:64px">
+      <span class="lbl" id="medalMult"></span>
+    </div>
     <div class="group" style="margin-left:auto">
       <button id="refreshBtn">Refresh</button>
       <button id="csvBtn">Export CSV</button>
@@ -106,7 +111,7 @@
 
   <table id="summary" style="display:none">
     <thead>
-      <tr><th>Run</th><th>Started</th><th>Duration</th><th>Peak wave</th><th>Best MPM</th><th>Samples</th></tr>
+      <tr><th>Run</th><th>Started</th><th>Duration</th><th>Peak wave</th><th>Best MPM</th><th>Medal %</th><th>Samples</th></tr>
     </thead>
     <tbody id="summaryBody"></tbody>
   </table>
@@ -199,6 +204,21 @@ function metricVal(v) {
   return (v === null || v === undefined || v === "") ? NaN : Number(v);
 }
 
+// a run's medal-buff % only if it's a valid non-negative integer, else null.
+function pctOf(run) {
+  const p = run ? Number(run.medalPct) : NaN;
+  return (Number.isInteger(p) && p >= 0) ? p : null;
+}
+// effective medals/min multiplier (1 when there's no valid buff).
+function medalMult(run) {
+  const p = pctOf(run);
+  return p != null ? 1 + p / 100 : 1;
+}
+
+function saveStore() {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(store)); } catch (e) {}
+}
+
 function drawChart() {
   chartGeom = null;
   const canvas = document.getElementById("chart");
@@ -214,12 +234,13 @@ function drawChart() {
 
   const run = selectedRun();
   if (!run) { legend.innerHTML = ""; return; }
+  const mult = medalMult(run);   // effective medals/min = raw × (1 + medal% / 100)
 
   // one line per metric, both for this single run; x = minutes since rebirth
   const series = SERIES.map(m => ({
     key: m.key, label: m.label, color: m.color, axis: m.axis,
     points: run.samples
-      .map(s => ({ x: (Number(s.t) || 0) / 60, y: metricVal(s[m.key]), rec: s.rec }))
+      .map(s => ({ x: (Number(s.t) || 0) / 60, y: m.key === "mpm" ? metricVal(s.mpm) * mult : metricVal(s[m.key]), rec: s.rec }))
       .filter(p => Number.isFinite(p.y))
   })).filter(s => s.points.length);
 
@@ -329,7 +350,7 @@ function drawChart() {
   chartGeom = {
     rows: run.samples.map(s => ({
       t: Number(s.t) || 0, x: (Number(s.t) || 0) / 60,
-      mpm: metricVal(s.mpm), wpm: metricVal(s.wpm), wave: metricVal(s.wave), rec: s.rec
+      mpm: metricVal(s.mpm) * mult, wpm: metricVal(s.wpm), wave: metricVal(s.wave), rec: s.rec
     })),
     xPix, yPix, padL, padR, padT, plotH, plotW, cssW, cssH
   };
@@ -414,7 +435,8 @@ function renderSummary() {
       <td>${isNaN(d.getTime()) ? "-" : d.toLocaleString()}</td>
       <td>${dur}</td>
       <td>${run.peakWave ?? "-"}</td>
-      <td>${fmtNum(Number(run.bestMpm))}</td>
+      <td>${fmtNum(Number(run.bestMpm) * medalMult(run))}</td>
+      <td>${pctOf(run) != null ? pctOf(run) + "%" : "-"}</td>
       <td>${samples.length}</td>
     </tr>`;
   }).join("");
@@ -430,6 +452,13 @@ function renderRunSelect() {
   sel.value = selectedRunId;
 }
 
+function syncMedalInput(run) {
+  const p = pctOf(run);
+  document.getElementById("medalPct").value = (p != null) ? p : "";
+  const m = medalMult(run);
+  document.getElementById("medalMult").textContent = m !== 1 ? "×" + (Math.round(m * 100) / 100) : "";
+}
+
 function render() {
   const has = hasData();
   document.getElementById("controls").style.display = has ? "flex" : "none";
@@ -438,8 +467,9 @@ function render() {
   document.getElementById("hint").style.display = has ? "block" : "none";
   document.getElementById("empty").style.display = has ? "none" : "block";
   if (!has) return;
-  selectedRun();        // resolve the default selection before drawing
+  const run = selectedRun();    // resolve the default selection before drawing
   renderRunSelect();
+  syncMedalInput(run);
   renderSummary();
   drawChart();
 }
@@ -482,7 +512,18 @@ function clearAll() {
 }
 
 // ---------- wire up ----------
-document.getElementById("runSelect").addEventListener("change", e => { selectedRunId = e.target.value; drawChart(); });
+document.getElementById("runSelect").addEventListener("change", e => { selectedRunId = e.target.value; syncMedalInput(selectedRun()); drawChart(); });
+document.getElementById("medalPct").addEventListener("change", e => {
+  const run = selectedRun();
+  if (!run) return;
+  const v = String(e.target.value).trim();
+  const p = v === "" ? null : parseInt(v, 10);
+  run.medalPct = (p !== null && Number.isFinite(p) && p >= 0) ? p : null;
+  saveStore();
+  syncMedalInput(run);
+  drawChart();
+  renderSummary();
+});
 document.getElementById("refreshBtn").addEventListener("click", () => { load(); render(); });
 document.getElementById("csvBtn").addEventListener("click", exportCsv);
 document.getElementById("jsonBtn").addEventListener("click", exportJson);

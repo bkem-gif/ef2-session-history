@@ -21,6 +21,7 @@
 
     var STORAGE_KEY = "__EF_SESSION_HISTORY__";
     var SAMPLE_GLOBAL = "__EF_WAVE_SAMPLE__";
+    var MEDAL_BUFF_KEY = "__EF_WAVE_TRACKER_MEDAL_BUFF_PERCENT__"; // the Wave Tracker's medal-buff input
     var SCHEMA_VERSION = 1;
 
     var DEFAULTS = {
@@ -74,6 +75,14 @@
         return { version: SCHEMA_VERSION, runs: [] };
     }
 
+    // The medal-buff % the Wave Tracker has stored (integer >= 0), or null if unset.
+    function readMedalPct() {
+        try {
+            var p = parseInt(window.localStorage.getItem(MEDAL_BUFF_KEY) || "", 10);
+            return (Number.isFinite(p) && p >= 0) ? p : null;
+        } catch (e) { return null; }
+    }
+
     var store = loadStore();
     var currentRun = store.runs[store.runs.length - 1] || null;
     var lastSampleAt = 0;
@@ -81,9 +90,31 @@
     var lastRebirthTimeSec = currentRun ? num(currentRun.lastRebirthTimeSec) : NaN;
     var nextRunId = store.runs.reduce(function (max, run) { return Math.max(max, num(run.id) || 0); }, 0) + 1;
 
+    // Before writing, adopt any medalPct correction made externally (e.g. in the
+    // viewer) for runs other than the one being actively recorded, so user edits to
+    // past runs aren't clobbered by our in-memory copy.
+    function mergeExternalMedalPct() {
+        try {
+            var ext = JSON.parse(window.localStorage.getItem(STORAGE_KEY) || "null");
+            if (!ext || !Array.isArray(ext.runs)) { return; }
+            var byId = {};
+            for (var i = 0; i < ext.runs.length; i++) { byId[ext.runs[i].id] = ext.runs[i]; }
+            for (var j = 0; j < store.runs.length; j++) {
+                var r = store.runs[j];
+                if (currentRun && r.id === currentRun.id) { continue; }
+                var e = byId[r.id];
+                if (e) { // a past run present externally: adopt the (validated) edit, incl. a clear to null
+                    var ep = parseInt(e.medalPct, 10);
+                    r.medalPct = (Number.isFinite(ep) && ep >= 0) ? ep : null;
+                }
+            }
+        } catch (err) {}
+    }
+
     function persist(now, force) {
         if (!force && now - lastPersistAt < config.persistIntervalMs) { return; }
         lastPersistAt = now;
+        mergeExternalMedalPct();
         try {
             window.localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
         } catch (error) {
@@ -109,6 +140,7 @@
             peakWave: null,
             bestMpm: null,
             lastRebirthTimeSec: num(state.rebirthTimeSec),
+            medalPct: readMedalPct(),
             samples: []
         };
         nextRunId += 1;
@@ -170,6 +202,9 @@
         if (currentRun.samples.length > config.maxSamplesPerRun) {
             currentRun.samples = decimate(currentRun.samples);
         }
+
+        var mp = readMedalPct();
+        if (mp != null) { currentRun.medalPct = mp; }
 
         persist(now);
     }
