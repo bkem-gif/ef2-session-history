@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EF2 Session History</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: #0c0c0e;
+    color: #ffe08a;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 13px;
+    line-height: 1.4;
+  }
+  header {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    padding: 14px 18px;
+    border-bottom: 1px solid rgba(255, 224, 138, 0.25);
+  }
+  header h1 { font-size: 18px; margin: 0; letter-spacing: 0.5px; }
+  header .sub { opacity: 0.6; font-size: 12px; }
+  .wrap { padding: 16px 18px; max-width: 1100px; }
+  .controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 14px;
+    align-items: center;
+    margin-bottom: 14px;
+  }
+  .group { display: flex; align-items: center; gap: 6px; }
+  .group > .lbl { opacity: 0.7; }
+  select, button {
+    background: rgba(255, 224, 138, 0.08);
+    color: #ffe08a;
+    border: 1px solid rgba(255, 224, 138, 0.4);
+    border-radius: 5px;
+    font: inherit;
+    padding: 5px 9px;
+    cursor: pointer;
+  }
+  select { padding-right: 22px; }
+  button:hover, .seg.active { background: rgba(255, 224, 138, 0.22); }
+  .seg { border-color: rgba(255, 224, 138, 0.3); }
+  .seg.active { border-color: rgba(255, 224, 138, 0.75); }
+  button.danger { color: #ff9c9c; border-color: rgba(255, 107, 107, 0.5); }
+  button.danger:hover { background: rgba(255, 107, 107, 0.18); }
+  .chart-card {
+    border: 1px solid rgba(255, 224, 138, 0.22);
+    border-radius: 10px;
+    background: rgba(0, 0, 0, 0.4);
+    padding: 12px;
+  }
+  canvas { width: 100%; height: 360px; display: block; }
+  .legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 10px; font-size: 12px; }
+  .legend .item { display: flex; align-items: center; gap: 5px; }
+  .legend .swatch { width: 14px; height: 3px; border-radius: 2px; }
+  table { border-collapse: collapse; margin-top: 18px; width: 100%; font-size: 12px; }
+  th, td { text-align: right; padding: 5px 10px; border-bottom: 1px solid rgba(255, 224, 138, 0.14); }
+  th:first-child, td:first-child { text-align: left; }
+  th { opacity: 0.7; font-weight: 600; }
+  .empty { opacity: 0.6; padding: 40px 0; text-align: center; font-size: 14px; }
+  .hint { opacity: 0.5; font-size: 12px; margin-top: 14px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>EF2 Session History</h1>
+  <span class="sub">wave progression &amp; medal/min, by rebirth run</span>
+</header>
+<div class="wrap">
+  <div class="controls" id="controls" style="display:none">
+    <div class="group">
+      <span class="lbl">Run</span>
+      <select id="runSelect"></select>
+    </div>
+    <div class="group" id="metricSeg">
+      <span class="lbl">Metric</span>
+    </div>
+    <div class="group" style="margin-left:auto">
+      <button id="refreshBtn">Refresh</button>
+      <button id="csvBtn">Export CSV</button>
+      <button id="jsonBtn">Export JSON</button>
+      <button id="clearBtn" class="danger">Clear</button>
+    </div>
+  </div>
+
+  <div id="chartCard" class="chart-card" style="display:none">
+    <canvas id="chart"></canvas>
+    <div class="legend" id="legend"></div>
+  </div>
+
+  <table id="summary" style="display:none">
+    <thead>
+      <tr><th>Run</th><th>Started</th><th>Duration</th><th>Peak wave</th><th>Best MPM</th><th>Samples</th></tr>
+    </thead>
+    <tbody id="summaryBody"></tbody>
+  </table>
+
+  <div id="empty" class="empty">
+    No session data recorded yet.<br>
+    Play the game with the Wave Tracker enabled — history records automatically.
+  </div>
+
+  <div class="hint" id="hint" style="display:none">
+    Data updates while you play in the game tab. Click <b>Refresh</b> to pull the latest.
+  </div>
+</div>
+
+<script>
+const STORAGE_KEY = "__EF_SESSION_HISTORY__";
+const PALETTE = ["#ffe08a", "#66e28a", "#6bb8ff", "#ff8ad8", "#ffae6b", "#b88aff", "#8affd8", "#ff6b6b"];
+const METRICS = [
+  { key: "wave",    label: "Wave" },
+  { key: "mpm",     label: "Medals/min" },
+  { key: "wpm",     label: "Waves/min" },
+  { key: "waveSec", label: "Wave time (s)" }
+];
+
+let store = { runs: [] };
+let selectedRunId = "all";
+let selectedMetric = "wave";
+
+function load() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    store = parsed && Array.isArray(parsed.runs) ? parsed : { runs: [] };
+  } catch (e) {
+    store = { runs: [] };
+  }
+}
+
+function fmtClock(sec) {
+  if (!Number.isFinite(sec)) return "-";
+  const s = Math.max(0, Math.floor(sec));
+  const m = Math.floor(s / 60);
+  return `${String(m).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+}
+
+function fmtNum(v) {
+  if (!Number.isFinite(v)) return "-";
+  if (v < 10000) return (Math.round(v * 100) / 100).toString();
+  const suffixes = ["", "k", "M", "B", "T", "aa", "ab"];
+  const tier = Math.floor(Math.log10(v) / 3);
+  const scaled = v / 1000 ** tier;
+  return parseFloat(scaled.toFixed(2)) + (suffixes[tier] || ("e" + tier * 3));
+}
+
+function fmtRunLabel(run) {
+  const d = new Date(run.startedAtWall || 0);
+  const stamp = isNaN(d.getTime()) ? "run " + run.id : d.toLocaleString();
+  return `#${run.id}  ${stamp}  (W${run.peakWave ?? "-"})`;
+}
+
+function visibleRuns() {
+  if (selectedRunId === "all") return store.runs.filter(r => r.samples && r.samples.length);
+  const run = store.runs.find(r => String(r.id) === String(selectedRunId));
+  return run ? [run] : [];
+}
+
+// ---------- charting ----------
+function niceCeil(value) {
+  if (value <= 0) return 1;
+  const exp = Math.floor(Math.log10(value));
+  const base = 10 ** exp;
+  const frac = value / base;
+  const nice = frac <= 1 ? 1 : frac <= 2 ? 2 : frac <= 5 ? 5 : 10;
+  return nice * base;
+}
+
+function drawChart() {
+  const canvas = document.getElementById("chart");
+  const dpr = window.devicePixelRatio || 1;
+  const cssW = canvas.clientWidth;
+  const cssH = canvas.clientHeight;
+  canvas.width = Math.round(cssW * dpr);
+  canvas.height = Math.round(cssH * dpr);
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssW, cssH);
+
+  const runs = visibleRuns();
+  const metric = METRICS.find(m => m.key === selectedMetric);
+  const padL = 64, padR = 14, padT = 14, padB = 34;
+  const plotW = cssW - padL - padR;
+  const plotH = cssH - padT - padB;
+
+  // gather points: x = minutes since rebirth, y = metric
+  const series = runs.map((run, i) => ({
+    run,
+    color: PALETTE[i % PALETTE.length],
+    points: run.samples
+      .map(s => ({ x: (Number(s.t) || 0) / 60, y: Number(s[metric.key]), rec: s.rec }))
+      .filter(p => Number.isFinite(p.y))
+  })).filter(s => s.points.length);
+
+  if (!series.length) {
+    ctx.fillStyle = "rgba(255,224,138,0.5)";
+    ctx.font = "13px monospace";
+    ctx.textAlign = "center";
+    ctx.fillText("No data points for this metric in the selected run.", cssW / 2, cssH / 2);
+    document.getElementById("legend").innerHTML = "";
+    return;
+  }
+
+  let maxX = 0, maxY = 0;
+  for (const s of series) for (const p of s.points) { if (p.x > maxX) maxX = p.x; if (p.y > maxY) maxY = p.y; }
+  maxX = niceCeil(Math.max(maxX, 0.1));
+  maxY = niceCeil(Math.max(maxY, 1));
+
+  const xPix = x => padL + (maxX ? (x / maxX) * plotW : 0);
+  const yPix = y => padT + plotH - (maxY ? (y / maxY) * plotH : 0);
+
+  // gridlines + axis labels
+  ctx.font = "11px monospace";
+  ctx.fillStyle = "rgba(255,224,138,0.55)";
+  ctx.strokeStyle = "rgba(255,224,138,0.12)";
+  ctx.lineWidth = 1;
+  const yTicks = 5;
+  ctx.textAlign = "right"; ctx.textBaseline = "middle";
+  for (let i = 0; i <= yTicks; i++) {
+    const yv = (maxY / yTicks) * i;
+    const py = yPix(yv);
+    ctx.beginPath(); ctx.moveTo(padL, py); ctx.lineTo(cssW - padR, py); ctx.stroke();
+    ctx.fillText(fmtNum(yv), padL - 8, py);
+  }
+  const xTicks = 6;
+  ctx.textAlign = "center"; ctx.textBaseline = "top";
+  for (let i = 0; i <= xTicks; i++) {
+    const xv = (maxX / xTicks) * i;
+    const px = xPix(xv);
+    ctx.beginPath(); ctx.moveTo(px, padT); ctx.lineTo(px, padT + plotH); ctx.stroke();
+    ctx.fillText(xv.toFixed(xv >= 10 ? 0 : 1), px, padT + plotH + 6);
+  }
+  ctx.fillStyle = "rgba(255,224,138,0.7)";
+  ctx.textAlign = "center";
+  ctx.fillText("rebirth time (min)", padL + plotW / 2, cssH - 12);
+
+  // y-axis title (rotated)
+  ctx.save();
+  ctx.translate(14, padT + plotH / 2);
+  ctx.rotate(-Math.PI / 2);
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.fillText(metric.label, 0, 0);
+  ctx.restore();
+
+  // lines
+  ctx.lineWidth = 2;
+  for (const s of series) {
+    ctx.strokeStyle = s.color;
+    ctx.beginPath();
+    s.points.forEach((p, idx) => {
+      const px = xPix(p.x), py = yPix(p.y);
+      if (idx === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    });
+    ctx.stroke();
+    // mark "rebirth recommended" points
+    ctx.fillStyle = "#ff6b6b";
+    for (const p of s.points) {
+      if (p.rec === "rebirth") {
+        ctx.beginPath(); ctx.arc(xPix(p.x), yPix(p.y), 2.5, 0, Math.PI * 2); ctx.fill();
+      }
+    }
+  }
+
+  // legend
+  const legend = document.getElementById("legend");
+  if (series.length > 1) {
+    legend.innerHTML = series.map(s =>
+      `<span class="item"><span class="swatch" style="background:${s.color}"></span>#${s.run.id} W${s.run.peakWave ?? "-"}</span>`
+    ).join("") + `<span class="item" style="opacity:.7"><span class="swatch" style="background:#ff6b6b"></span>rebirth advised</span>`;
+  } else {
+    legend.innerHTML = `<span class="item" style="opacity:.7"><span class="swatch" style="background:#ff6b6b"></span>rebirth advised</span>`;
+  }
+}
+
+function renderSummary() {
+  const body = document.getElementById("summaryBody");
+  const runs = [...store.runs].reverse();
+  body.innerHTML = runs.map(run => {
+    const samples = run.samples || [];
+    const last = samples[samples.length - 1];
+    const dur = last ? fmtClock(Number(last.t)) : "-";
+    const d = new Date(run.startedAtWall || 0);
+    return `<tr>
+      <td>#${run.id}</td>
+      <td>${isNaN(d.getTime()) ? "-" : d.toLocaleString()}</td>
+      <td>${dur}</td>
+      <td>${run.peakWave ?? "-"}</td>
+      <td>${fmtNum(Number(run.bestMpm))}</td>
+      <td>${samples.length}</td>
+    </tr>`;
+  }).join("");
+}
+
+function renderRunSelect() {
+  const sel = document.getElementById("runSelect");
+  const opts = ['<option value="all">All runs (overlay)</option>'];
+  for (const run of [...store.runs].reverse()) {
+    if (!run.samples || !run.samples.length) continue;
+    opts.push(`<option value="${run.id}">${fmtRunLabel(run)}</option>`);
+  }
+  sel.innerHTML = opts.join("");
+  sel.value = selectedRunId;
+}
+
+function renderMetricSeg() {
+  const seg = document.getElementById("metricSeg");
+  seg.querySelectorAll(".seg").forEach(b => b.remove());
+  for (const m of METRICS) {
+    const b = document.createElement("button");
+    b.className = "seg" + (m.key === selectedMetric ? " active" : "");
+    b.textContent = m.label;
+    b.onclick = () => { selectedMetric = m.key; renderMetricSeg(); drawChart(); };
+    seg.appendChild(b);
+  }
+}
+
+function hasData() {
+  return store.runs.some(r => r.samples && r.samples.length);
+}
+
+function render() {
+  const has = hasData();
+  document.getElementById("controls").style.display = has ? "flex" : "none";
+  document.getElementById("chartCard").style.display = has ? "block" : "none";
+  document.getElementById("summary").style.display = has ? "table" : "none";
+  document.getElementById("hint").style.display = has ? "block" : "none";
+  document.getElementById("empty").style.display = has ? "none" : "block";
+  if (!has) return;
+  renderRunSelect();
+  renderMetricSeg();
+  renderSummary();
+  drawChart();
+}
+
+// ---------- exports ----------
+function download(name, text, type) {
+  const blob = new Blob([text], { type });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = name;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function exportCsv() {
+  const runs = visibleRuns();
+  const cols = ["run", "t_sec", "wall_iso", "wave", "maxWave", "mpm", "bestMpm", "wpm", "waveSec", "done", "skip", "rec"];
+  const rows = [cols.join(",")];
+  for (const run of runs) {
+    for (const s of run.samples) {
+      rows.push([
+        run.id, s.t ?? "", s.wall ? new Date(s.wall).toISOString() : "",
+        s.wave ?? "", s.maxWave ?? "", s.mpm ?? "", s.bestMpm ?? "",
+        s.wpm ?? "", s.waveSec ?? "", s.done ?? "", s.skip ?? "", s.rec ?? ""
+      ].join(","));
+    }
+  }
+  download("ef2-history.csv", rows.join("\n"), "text/csv");
+}
+
+function exportJson() {
+  download("ef2-history.json", JSON.stringify({ version: store.version, runs: visibleRuns() }, null, 2), "application/json");
+}
+
+function clearAll() {
+  if (!confirm("Delete all recorded session history? This cannot be undone.")) return;
+  try { localStorage.removeItem(STORAGE_KEY); } catch (e) {}
+  selectedRunId = "all";
+  load();
+  render();
+}
+
+// ---------- wire up ----------
+document.getElementById("runSelect").addEventListener("change", e => { selectedRunId = e.target.value; drawChart(); });
+document.getElementById("refreshBtn").addEventListener("click", () => { load(); render(); });
+document.getElementById("csvBtn").addEventListener("click", exportCsv);
+document.getElementById("jsonBtn").addEventListener("click", exportJson);
+document.getElementById("clearBtn").addEventListener("click", clearAll);
+window.addEventListener("resize", () => { if (hasData()) drawChart(); });
+// live-update if the game tab writes new data
+window.addEventListener("storage", e => { if (e.key === STORAGE_KEY) { load(); render(); } });
+
+load();
+render();
+</script>
+</body>
+</html>
