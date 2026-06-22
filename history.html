@@ -44,9 +44,7 @@
     cursor: pointer;
   }
   select { padding-right: 22px; }
-  button:hover, .seg.active { background: rgba(255, 224, 138, 0.22); }
-  .seg { border-color: rgba(255, 224, 138, 0.3); }
-  .seg.active { border-color: rgba(255, 224, 138, 0.75); }
+  button:hover { background: rgba(255, 224, 138, 0.22); }
   button.danger { color: #ff9c9c; border-color: rgba(255, 107, 107, 0.5); }
   button.danger:hover { background: rgba(255, 107, 107, 0.18); }
   .chart-card {
@@ -70,16 +68,13 @@
 <body>
 <header>
   <h1>EF2 Session History</h1>
-  <span class="sub">wave progression &amp; medal/min, by rebirth run</span>
+  <span class="sub">waves/min &amp; medals/min, by rebirth run</span>
 </header>
 <div class="wrap">
   <div class="controls" id="controls" style="display:none">
     <div class="group">
       <span class="lbl">Run</span>
       <select id="runSelect"></select>
-    </div>
-    <div class="group" id="metricSeg">
-      <span class="lbl">Metric</span>
     </div>
     <div class="group" style="margin-left:auto">
       <button id="refreshBtn">Refresh</button>
@@ -113,17 +108,15 @@
 
 <script>
 const STORAGE_KEY = "__EF_SESSION_HISTORY__";
-const PALETTE = ["#ffe08a", "#66e28a", "#6bb8ff", "#ff8ad8", "#ffae6b", "#b88aff", "#8affd8", "#ff6b6b"];
-const METRICS = [
-  { key: "wave",    label: "Wave" },
-  { key: "mpm",     label: "Medals/min" },
-  { key: "wpm",     label: "Waves/min" },
-  { key: "waveSec", label: "Wave time (s)" }
+// Both metrics are overlaid on one chart. Their scales differ wildly (medals/min
+// dwarfs waves/min), so each gets its own y-axis.
+const SERIES = [
+  { key: "mpm", label: "Medals/min", color: "#ffe08a", axis: "left" },
+  { key: "wpm", label: "Waves/min",  color: "#6bb8ff", axis: "right" }
 ];
 
 let store = { runs: [] };
-let selectedRunId = "all";
-let selectedMetric = "wave";
+let selectedRunId = null;   // resolved to the latest run with data
 
 function load() {
   try {
@@ -157,10 +150,21 @@ function fmtRunLabel(run) {
   return `#${run.id}  ${stamp}  (W${run.peakWave ?? "-"})`;
 }
 
-function visibleRuns() {
-  if (selectedRunId === "all") return store.runs.filter(r => r.samples && r.samples.length);
-  const run = store.runs.find(r => String(r.id) === String(selectedRunId));
-  return run ? [run] : [];
+function runsWithData() {
+  return store.runs.filter(r => r.samples && r.samples.length);
+}
+
+// The single run currently charted; defaults to the most recent one with data.
+function selectedRun() {
+  const runs = runsWithData();
+  if (!runs.length) return null;
+  let run = runs.find(r => String(r.id) === String(selectedRunId));
+  if (!run) { run = runs[runs.length - 1]; selectedRunId = run.id; }
+  return run;
+}
+
+function hasData() {
+  return store.runs.some(r => r.samples && r.samples.length);
 }
 
 // ---------- charting ----------
@@ -175,6 +179,7 @@ function niceCeil(value) {
 
 function drawChart() {
   const canvas = document.getElementById("chart");
+  const legend = document.getElementById("legend");
   const dpr = window.devicePixelRatio || 1;
   const cssW = canvas.clientWidth;
   const cssH = canvas.clientHeight;
@@ -184,53 +189,74 @@ function drawChart() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, cssW, cssH);
 
-  const runs = visibleRuns();
-  const metric = METRICS.find(m => m.key === selectedMetric);
-  const padL = 64, padR = 14, padT = 14, padB = 34;
-  const plotW = cssW - padL - padR;
-  const plotH = cssH - padT - padB;
+  const run = selectedRun();
+  if (!run) { legend.innerHTML = ""; return; }
 
-  // gather points: x = minutes since rebirth, y = metric
-  const series = runs.map((run, i) => ({
-    run,
-    color: PALETTE[i % PALETTE.length],
+  // one line per metric, both for this single run; x = minutes since rebirth
+  const series = SERIES.map(m => ({
+    key: m.key, label: m.label, color: m.color, axis: m.axis,
     points: run.samples
-      .map(s => ({ x: (Number(s.t) || 0) / 60, y: Number(s[metric.key]), rec: s.rec }))
+      .map(s => ({ x: (Number(s.t) || 0) / 60, y: Number(s[m.key]), rec: s.rec }))
       .filter(p => Number.isFinite(p.y))
   })).filter(s => s.points.length);
+
+  const padL = 64, padR = 64, padT = 14, padB = 34;
+  const plotW = cssW - padL - padR;
+  const plotH = cssH - padT - padB;
 
   if (!series.length) {
     ctx.fillStyle = "rgba(255,224,138,0.5)";
     ctx.font = "13px monospace";
     ctx.textAlign = "center";
-    ctx.fillText("No data points for this metric in the selected run.", cssW / 2, cssH / 2);
-    document.getElementById("legend").innerHTML = "";
+    ctx.fillText("No waves/min or medals/min data in this run yet.", cssW / 2, cssH / 2);
+    legend.innerHTML = "";
     return;
   }
 
-  let maxX = 0, maxY = 0;
-  for (const s of series) for (const p of s.points) { if (p.x > maxX) maxX = p.x; if (p.y > maxY) maxY = p.y; }
+  // shared x; an independent y-scale per axis
+  let maxX = 0;
+  const axisMax = { left: 0, right: 0 };
+  for (const s of series) for (const p of s.points) {
+    if (p.x > maxX) maxX = p.x;
+    if (p.y > axisMax[s.axis]) axisMax[s.axis] = p.y;
+  }
   maxX = niceCeil(Math.max(maxX, 0.1));
-  maxY = niceCeil(Math.max(maxY, 1));
+  axisMax.left = niceCeil(Math.max(axisMax.left, 1));
+  axisMax.right = niceCeil(Math.max(axisMax.right, 1));
+
+  const haveLeft = series.some(s => s.axis === "left");
+  const haveRight = series.some(s => s.axis === "right");
+  const leftColor = "#ffe08a";
+  const rightColor = "#6bb8ff";
 
   const xPix = x => padL + (maxX ? (x / maxX) * plotW : 0);
-  const yPix = y => padT + plotH - (maxY ? (y / maxY) * plotH : 0);
+  const yPix = (y, axis) => padT + plotH - (axisMax[axis] ? (y / axisMax[axis]) * plotH : 0);
 
-  // gridlines + axis labels
+  // gridlines + a y-axis on each side
   ctx.font = "11px monospace";
-  ctx.fillStyle = "rgba(255,224,138,0.55)";
-  ctx.strokeStyle = "rgba(255,224,138,0.12)";
   ctx.lineWidth = 1;
   const yTicks = 5;
-  ctx.textAlign = "right"; ctx.textBaseline = "middle";
+  ctx.textBaseline = "middle";
   for (let i = 0; i <= yTicks; i++) {
-    const yv = (maxY / yTicks) * i;
-    const py = yPix(yv);
+    const frac = i / yTicks;
+    const py = padT + plotH - frac * plotH;
+    ctx.strokeStyle = "rgba(255,224,138,0.12)";
     ctx.beginPath(); ctx.moveTo(padL, py); ctx.lineTo(cssW - padR, py); ctx.stroke();
-    ctx.fillText(fmtNum(yv), padL - 8, py);
+    if (haveLeft) {
+      ctx.fillStyle = leftColor; ctx.textAlign = "right";
+      ctx.fillText(fmtNum(axisMax.left * frac), padL - 8, py);
+    }
+    if (haveRight) {
+      ctx.fillStyle = rightColor; ctx.textAlign = "left";
+      ctx.fillText(fmtNum(axisMax.right * frac), cssW - padR + 8, py);
+    }
   }
-  const xTicks = 6;
+
+  // x gridlines + labels
+  ctx.strokeStyle = "rgba(255,224,138,0.12)";
+  ctx.fillStyle = "rgba(255,224,138,0.55)";
   ctx.textAlign = "center"; ctx.textBaseline = "top";
+  const xTicks = 6;
   for (let i = 0; i <= xTicks; i++) {
     const xv = (maxX / xTicks) * i;
     const px = xPix(xv);
@@ -238,24 +264,27 @@ function drawChart() {
     ctx.fillText(xv.toFixed(xv >= 10 ? 0 : 1), px, padT + plotH + 6);
   }
   ctx.fillStyle = "rgba(255,224,138,0.7)";
-  ctx.textAlign = "center";
   ctx.fillText("rebirth time (min)", padL + plotW / 2, cssH - 12);
 
-  // y-axis title (rotated)
-  ctx.save();
-  ctx.translate(14, padT + plotH / 2);
-  ctx.rotate(-Math.PI / 2);
-  ctx.textAlign = "center"; ctx.textBaseline = "middle";
-  ctx.fillText(metric.label, 0, 0);
-  ctx.restore();
+  // rotated, colour-coded axis titles
+  if (haveLeft) {
+    ctx.save(); ctx.translate(14, padT + plotH / 2); ctx.rotate(-Math.PI / 2);
+    ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillStyle = leftColor;
+    ctx.fillText("Medals/min", 0, 0); ctx.restore();
+  }
+  if (haveRight) {
+    ctx.save(); ctx.translate(cssW - 14, padT + plotH / 2); ctx.rotate(Math.PI / 2);
+    ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillStyle = rightColor;
+    ctx.fillText("Waves/min", 0, 0); ctx.restore();
+  }
 
-  // lines
+  // the two lines
   ctx.lineWidth = 2;
   for (const s of series) {
     ctx.strokeStyle = s.color;
     ctx.beginPath();
     s.points.forEach((p, idx) => {
-      const px = xPix(p.x), py = yPix(p.y);
+      const px = xPix(p.x), py = yPix(p.y, s.axis);
       if (idx === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
     });
     ctx.stroke();
@@ -263,20 +292,15 @@ function drawChart() {
     ctx.fillStyle = "#ff6b6b";
     for (const p of s.points) {
       if (p.rec === "rebirth") {
-        ctx.beginPath(); ctx.arc(xPix(p.x), yPix(p.y), 2.5, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(xPix(p.x), yPix(p.y, s.axis), 2.5, 0, Math.PI * 2); ctx.fill();
       }
     }
   }
 
   // legend
-  const legend = document.getElementById("legend");
-  if (series.length > 1) {
-    legend.innerHTML = series.map(s =>
-      `<span class="item"><span class="swatch" style="background:${s.color}"></span>#${s.run.id} W${s.run.peakWave ?? "-"}</span>`
-    ).join("") + `<span class="item" style="opacity:.7"><span class="swatch" style="background:#ff6b6b"></span>rebirth advised</span>`;
-  } else {
-    legend.innerHTML = `<span class="item" style="opacity:.7"><span class="swatch" style="background:#ff6b6b"></span>rebirth advised</span>`;
-  }
+  legend.innerHTML = series.map(s =>
+    `<span class="item"><span class="swatch" style="background:${s.color}"></span>${s.label} (${s.axis === "left" ? "left" : "right"})</span>`
+  ).join("") + `<span class="item" style="opacity:.7"><span class="swatch" style="background:#ff6b6b"></span>rebirth advised</span>`;
 }
 
 function renderSummary() {
@@ -300,29 +324,12 @@ function renderSummary() {
 
 function renderRunSelect() {
   const sel = document.getElementById("runSelect");
-  const opts = ['<option value="all">All runs (overlay)</option>'];
-  for (const run of [...store.runs].reverse()) {
-    if (!run.samples || !run.samples.length) continue;
+  const opts = [];
+  for (const run of [...runsWithData()].reverse()) {
     opts.push(`<option value="${run.id}">${fmtRunLabel(run)}</option>`);
   }
   sel.innerHTML = opts.join("");
   sel.value = selectedRunId;
-}
-
-function renderMetricSeg() {
-  const seg = document.getElementById("metricSeg");
-  seg.querySelectorAll(".seg").forEach(b => b.remove());
-  for (const m of METRICS) {
-    const b = document.createElement("button");
-    b.className = "seg" + (m.key === selectedMetric ? " active" : "");
-    b.textContent = m.label;
-    b.onclick = () => { selectedMetric = m.key; renderMetricSeg(); drawChart(); };
-    seg.appendChild(b);
-  }
-}
-
-function hasData() {
-  return store.runs.some(r => r.samples && r.samples.length);
 }
 
 function render() {
@@ -333,13 +340,13 @@ function render() {
   document.getElementById("hint").style.display = has ? "block" : "none";
   document.getElementById("empty").style.display = has ? "none" : "block";
   if (!has) return;
+  selectedRun();        // resolve the default selection before drawing
   renderRunSelect();
-  renderMetricSeg();
   renderSummary();
   drawChart();
 }
 
-// ---------- exports ----------
+// ---------- exports (always the full history, so they double as a backup) ----------
 function download(name, text, type) {
   const blob = new Blob([text], { type });
   const url = URL.createObjectURL(blob);
@@ -350,11 +357,10 @@ function download(name, text, type) {
 }
 
 function exportCsv() {
-  const runs = visibleRuns();
   const cols = ["run", "t_sec", "wall_iso", "wave", "maxWave", "mpm", "bestMpm", "wpm", "waveSec", "done", "skip", "rec"];
   const rows = [cols.join(",")];
-  for (const run of runs) {
-    for (const s of run.samples) {
+  for (const run of store.runs) {
+    for (const s of run.samples || []) {
       rows.push([
         run.id, s.t ?? "", s.wall ? new Date(s.wall).toISOString() : "",
         s.wave ?? "", s.maxWave ?? "", s.mpm ?? "", s.bestMpm ?? "",
@@ -366,13 +372,13 @@ function exportCsv() {
 }
 
 function exportJson() {
-  download("ef2-history.json", JSON.stringify({ version: store.version, runs: visibleRuns() }, null, 2), "application/json");
+  download("ef2-history.json", JSON.stringify({ version: store.version, runs: store.runs }, null, 2), "application/json");
 }
 
 function clearAll() {
   if (!confirm("Delete all recorded session history? This cannot be undone.")) return;
   try { localStorage.removeItem(STORAGE_KEY); } catch (e) {}
-  selectedRunId = "all";
+  selectedRunId = null;
   load();
   render();
 }
