@@ -131,8 +131,8 @@ const STORAGE_KEY = "__EF_SESSION_HISTORY__";
 // Both metrics are overlaid on one chart. Their scales differ wildly (medals/min
 // dwarfs waves/min), so each gets its own y-axis.
 const SERIES = [
-  { key: "mpm", label: "Medals/min", color: "#ffe08a", axis: "left" },
-  { key: "wpm", label: "Waves/min",  color: "#6bb8ff", axis: "right" }
+  { key: "mpm", label: "Medals/min", color: "#ffe08a", axis: "left",  fmt: fmtMedals },
+  { key: "wpm", label: "Waves/min",  color: "#6bb8ff", axis: "right", fmt: fmtNum }
 ];
 
 let store = { runs: [] };
@@ -254,9 +254,9 @@ function drawChart() {
 
   // one line per metric, both for this single run; x = minutes since rebirth
   const series = SERIES.map(m => ({
-    key: m.key, label: m.label, color: m.color, axis: m.axis,
+    key: m.key, label: m.label, color: m.color, axis: m.axis, fmt: m.fmt,
     points: run.samples
-      .map(s => ({ x: (Number(s.t) || 0) / 60, y: m.key === "mpm" ? metricVal(s.mpm) * mult : metricVal(s[m.key]), rec: s.rec }))
+      .map(s => ({ x: (Number(s.t) || 0) / 60, t: Number(s.t) || 0, y: m.key === "mpm" ? metricVal(s.mpm) * mult : metricVal(s[m.key]), rec: s.rec }))
       .filter(p => Number.isFinite(p.y))
   })).filter(s => s.points.length);
 
@@ -357,10 +357,27 @@ function drawChart() {
     }
   }
 
-  // legend
-  legend.innerHTML = series.map(s =>
-    `<span class="item"><span class="swatch" style="background:${s.color}"></span>${s.label} (${s.axis === "left" ? "left" : "right"})</span>`
-  ).join("") + `<span class="item" style="opacity:.7"><span class="swatch" style="background:#ff6b6b"></span>rebirth advised</span>`;
+  // peak marker + value on each line (the run's max for that metric)
+  const peakX = {};
+  for (const s of series) {
+    const peak = s.points.reduce((b, p) => (p.y > b.y ? p : b), s.points[0]);
+    s.peak = peak;
+    peakX[s.key] = peak.x;
+    const px = xPix(peak.x), py = yPix(peak.y, s.axis);
+    ctx.strokeStyle = s.color; ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.arc(px, py, 6, 0, Math.PI * 2); ctx.stroke();
+    ctx.fillStyle = s.color; ctx.beginPath(); ctx.arc(px, py, 2, 0, Math.PI * 2); ctx.fill();
+    ctx.font = "bold 11px monospace"; ctx.fillStyle = s.color; ctx.textAlign = "center";
+    let ly = py - 11; ctx.textBaseline = "bottom";
+    if (ly < padT + 12) { ly = py + 11; ctx.textBaseline = "top"; }
+    ctx.fillText(s.fmt(peak.y), Math.max(padL + 18, Math.min(cssW - padR - 18, px)), ly);
+  }
+
+  // legend (with each line's peak value + time, for the at-a-glance readout)
+  legend.innerHTML = series.map(s => {
+    const peakStr = s.peak ? ` &middot; peak <b>${s.fmt(s.peak.y)}</b> @ ${fmtClock(s.peak.t)}` : "";
+    return `<span class="item"><span class="swatch" style="background:${s.color}"></span>${s.label} (${s.axis === "left" ? "left" : "right"})${peakStr}</span>`;
+  }).join("") + `<span class="item" style="opacity:.7"><span class="swatch" style="background:#ff6b6b"></span>rebirth advised</span>`;
 
   // remember the geometry so hover can map a mouse x back to the nearest sample
   chartGeom = {
@@ -368,7 +385,7 @@ function drawChart() {
       t: Number(s.t) || 0, x: (Number(s.t) || 0) / 60,
       mpm: metricVal(s.mpm) * mult, wpm: metricVal(s.wpm), wave: metricVal(s.wave), rec: s.rec
     })),
-    xPix, yPix, padL, padR, padT, plotH, plotW, cssW, cssH
+    peakX, xPix, yPix, padL, padR, padT, plotH, plotW, cssW, cssH
   };
 }
 
@@ -404,8 +421,9 @@ function showTooltip(row) {
   const dot = c => `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${c};margin-right:5px"></span>`;
   let html = `<div style="opacity:.75;margin-bottom:3px">⏱ ${fmtClock(row.t)}` +
     (row.rec === "rebirth" ? '  <span style="color:#ff6b6b">rebirth advised</span>' : "") + `</div>`;
-  html += `<div>${dot("#ffe08a")}Medals/min: <b>${Number.isFinite(row.mpm) ? fmtMedals(row.mpm) : "-"}</b></div>`;
-  html += `<div>${dot("#6bb8ff")}Waves/min: <b>${Number.isFinite(row.wpm) ? fmtNum(row.wpm) : "-"}</b></div>`;
+  const peakTag = key => (g.peakX && row.x === g.peakX[key]) ? ' <span style="opacity:.85">◆ max</span>' : "";
+  html += `<div>${dot("#ffe08a")}Medals/min: <b>${Number.isFinite(row.mpm) ? fmtMedals(row.mpm) : "-"}</b>${peakTag("mpm")}</div>`;
+  html += `<div>${dot("#6bb8ff")}Waves/min: <b>${Number.isFinite(row.wpm) ? fmtNum(row.wpm) : "-"}</b>${peakTag("wpm")}</div>`;
   if (Number.isFinite(row.wave)) html += `<div style="opacity:.7;margin-top:2px">Wave ${row.wave}</div>`;
   tip.innerHTML = html;
   tip.style.display = "block";
