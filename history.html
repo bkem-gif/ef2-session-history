@@ -143,6 +143,10 @@
     <canvas id="chart"></canvas>
     <div class="tooltip" id="tooltip"></div>
     <div class="legend" id="legend"></div>
+    <div style="display:flex;align-items:center;justify-content:flex-end;gap:10px;margin-top:4px">
+      <span style="font-size:10px;opacity:.4">drag across the chart or scroll to zoom &middot; double-click to reset</span>
+      <button id="zoomReset" type="button" style="display:none;font-size:12px;padding:2px 9px">Reset zoom</button>
+    </div>
   </div>
 
   <div id="notesCard" class="chart-card" style="display:none;margin-top:14px">
@@ -190,6 +194,8 @@ const SERIES = [
 let store = { runs: [] };
 let selectedRunId = null;   // resolved to the latest run with data
 let chartGeom = null;       // pixel geometry of the last draw, for hover
+let xView = null;           // zoom window in data-x (minutes): {min,max}; null = full extent
+let dragZoom = null;        // in-progress drag-to-select-x state
 
 function load() {
   try {
@@ -539,14 +545,20 @@ function drawChart() {
     return;
   }
 
-  // shared x; an independent y-scale per axis
-  let maxX = 0;
+  // full x extent of the data (the default, unzoomed domain)
+  let dataMaxX = 0;
+  for (const s of series) for (const p of s.points) if (p.x > dataMaxX) dataMaxX = p.x;
+  const fullMaxX = niceCeil(Math.max(dataMaxX, 0.1));
+  // visible x window (zoom): clamp the saved view to the data
+  const vMin = xView ? Math.max(0, Math.min(xView.min, fullMaxX)) : 0;
+  const vMax = xView ? Math.min(fullMaxX, Math.max(xView.max, vMin + 1e-6)) : fullMaxX;
+  const xSpan = (vMax - vMin) || 1;
+  // an independent y-scale per axis, fit to the VISIBLE window so a zoom reveals its detail
   const axisMax = { left: 0, right: 0 };
   for (const s of series) for (const p of s.points) {
-    if (p.x > maxX) maxX = p.x;
+    if (p.x < vMin || p.x > vMax) continue;
     if (p.y > axisMax[s.axis]) axisMax[s.axis] = p.y;
   }
-  maxX = niceCeil(Math.max(maxX, 0.1));
   axisMax.left = niceCeil(Math.max(axisMax.left, 1));
   axisMax.right = niceCeil(Math.max(axisMax.right, 1));
 
@@ -555,7 +567,7 @@ function drawChart() {
   const leftColor = multi ? "rgba(220,220,230,0.5)" : "#ffe08a";
   const rightColor = multi ? "rgba(220,220,230,0.5)" : "#6bb8ff";
 
-  const xPix = x => padL + (maxX ? (x / maxX) * plotW : 0);
+  const xPix = x => padL + ((x - vMin) / xSpan) * plotW;
   const yPix = (y, axis) => padT + plotH - (axisMax[axis] ? (y / axisMax[axis]) * plotH : 0);
 
   // shade stretches where Divine Blessing (the priest +3 speed buff) looks absent
@@ -594,10 +606,10 @@ function drawChart() {
   ctx.textAlign = "center"; ctx.textBaseline = "top";
   const xTicks = 6;
   for (let i = 0; i <= xTicks; i++) {
-    const xv = (maxX / xTicks) * i;
+    const xv = vMin + (xSpan / xTicks) * i;
     const px = xPix(xv);
     ctx.beginPath(); ctx.moveTo(px, padT); ctx.lineTo(px, padT + plotH); ctx.stroke();
-    ctx.fillText(xv.toFixed(xv >= 10 ? 0 : 1), px, padT + plotH + 6);
+    ctx.fillText(xv.toFixed((xSpan / xTicks) < 1 ? 1 : (xv >= 10 ? 0 : 1)), px, padT + plotH + 6);
   }
   ctx.fillStyle = "rgba(255,224,138,0.7)";
   ctx.fillText("rebirth time (min)", padL + plotW / 2, cssH - 12);
@@ -614,7 +626,10 @@ function drawChart() {
     ctx.fillText("Waves/min", 0, 0); ctx.restore();
   }
 
-  // the lines — all solid; metric reads by colour temperature (warm medals / cool waves)
+  // the lines — all solid; metric reads by colour temperature (warm medals / cool waves).
+  // clipped to the plot so a zoomed-out-of-view segment can't spill past the axes.
+  ctx.save();
+  ctx.beginPath(); ctx.rect(padL, padT, plotW, plotH); ctx.clip();
   ctx.lineWidth = 2;
   for (const s of series) {
     ctx.strokeStyle = s.color;
@@ -631,13 +646,16 @@ function drawChart() {
       }
     }
   }
+  ctx.restore();
 
-  // ringed peak marker + value label on every line (each run's max for that metric)
+  // ringed peak marker + value label on every line (each run's max for that metric).
+  // peaks always reflect the run's true max; the marker is drawn only when it's in view.
   const peaks = {};
   for (const s of series) {
     const peak = s.points.reduce((b, p) => (p.y > b.y ? p : b), s.points[0]);
     s.peak = peak;
     if (!multi) { peaks[s.key] = peak; }
+    if (peak.x < vMin || peak.x > vMax) continue;   // out of the zoom window -> no marker
     const px = xPix(peak.x), py = yPix(peak.y, s.axis);
     ctx.strokeStyle = s.color; ctx.lineWidth = 2.5;
     ctx.beginPath(); ctx.arc(px, py, 6, 0, Math.PI * 2); ctx.stroke();
@@ -678,7 +696,7 @@ function drawChart() {
         mpm: metricVal(s.mpm) * mult, wpm: metricVal(s.wpm), wave: metricVal(s.wave), rec: s.rec,
         buffDown: buff.ok && inAnySpan((Number(s.t) || 0) / 60, buff.spans)
       })),
-      peaks, xPix, yPix, padL, padR, padT, plotH, plotW, cssW, cssH
+      peaks, xPix, yPix, padL, padR, padT, plotH, plotW, cssW, cssH, vMin, vMax, fullMaxX
     };
   } else {
     chartGeom = {
@@ -696,7 +714,7 @@ function drawChart() {
           mpmPeak, wpmPeak, rows
         };
       }),
-      xPix, yPix, padL, padR, padT, plotH, plotW, cssW, cssH
+      xPix, yPix, padL, padR, padT, plotH, plotW, cssW, cssH, vMin, vMax, fullMaxX
     };
   }
 }
@@ -808,7 +826,7 @@ function showTooltipMulti(mx) {
 }
 
 function onChartMove(e) {
-  if (!chartGeom) return;
+  if (!chartGeom || dragZoom) return;   // ignore hover mid-drag
   const canvas = document.getElementById("chart");
   const rect = canvas.getBoundingClientRect();
   const mx = e.clientX - rect.left, my = e.clientY - rect.top;
@@ -822,6 +840,80 @@ function onChartMove(e) {
     if (!row) { hideHover(); return; }
     drawChart(); drawHoverMarks(row); showTooltip(row);
   }
+}
+
+// ---------- zoom ----------
+function chartMouse(e) {
+  const rect = document.getElementById("chart").getBoundingClientRect();
+  return { mx: e.clientX - rect.left, my: e.clientY - rect.top };
+}
+// pixel x -> data x (minutes), within the current visible window
+function pxToDataX(mx, g) {
+  const f = Math.max(0, Math.min(1, (mx - g.padL) / g.plotW));
+  return g.vMin + f * (g.vMax - g.vMin);
+}
+function updateZoomUI() {
+  const btn = document.getElementById("zoomReset");
+  if (btn) btn.style.display = xView ? "inline-block" : "none";
+}
+function resetZoom() { if (xView) { xView = null; drawChart(); updateZoomUI(); } }
+
+function onChartDown(e) {
+  if (!chartGeom) return;
+  const g = chartGeom;
+  const { mx, my } = chartMouse(e);
+  if (mx < g.padL || mx > g.cssW - g.padR || my < g.padT || my > g.padT + g.plotH) return;
+  dragZoom = { x0: mx, x0data: pxToDataX(mx, g), moved: false };
+  window.addEventListener("mousemove", onDragMove);
+  window.addEventListener("mouseup", onDragUp);
+  e.preventDefault();   // no text selection while dragging
+}
+function onDragMove(e) {
+  if (!dragZoom || !chartGeom) return;
+  const g = chartGeom;
+  const { mx } = chartMouse(e);
+  if (Math.abs(mx - dragZoom.x0) > 4) dragZoom.moved = true;
+  if (!dragZoom.moved) return;
+  hideHover();
+  drawChart();   // repaint the chart, then the selection band on top
+  const ctx = document.getElementById("chart").getContext("2d");
+  const cur = Math.max(g.padL, Math.min(g.cssW - g.padR, mx));
+  const lo = Math.min(dragZoom.x0, cur), hi = Math.max(dragZoom.x0, cur);
+  ctx.fillStyle = "rgba(255,224,138,0.18)";
+  ctx.fillRect(lo, g.padT, hi - lo, g.plotH);
+  ctx.strokeStyle = "rgba(255,224,138,0.55)"; ctx.lineWidth = 1;
+  ctx.strokeRect(lo + 0.5, g.padT + 0.5, Math.max(0, hi - lo - 1), g.plotH - 1);
+}
+function onDragUp(e) {
+  window.removeEventListener("mousemove", onDragMove);
+  window.removeEventListener("mouseup", onDragUp);
+  const dz = dragZoom; dragZoom = null;
+  if (!dz || !chartGeom) return;
+  if (!dz.moved) { return; }   // a click, not a drag — leave hover/zoom as-is
+  const g = chartGeom;
+  const x1 = pxToDataX(chartMouse(e).mx, g);
+  const lo = Math.min(dz.x0data, x1), hi = Math.max(dz.x0data, x1);
+  if (hi > lo && (hi - lo) >= (g.vMax - g.vMin) * 0.02) { xView = { min: lo, max: hi }; }
+  drawChart();   // clears the band; applies the zoom if one was set
+  updateZoomUI();
+}
+function onChartWheel(e) {
+  if (!chartGeom) return;
+  const g = chartGeom;
+  const { mx } = chartMouse(e);
+  if (mx < g.padL || mx > g.cssW - g.padR) return;
+  e.preventDefault();
+  const cursorX = pxToDataX(mx, g);
+  const curSpan = g.vMax - g.vMin;
+  let span = curSpan * (e.deltaY < 0 ? 0.8 : 1.25);          // wheel up = zoom in
+  span = Math.max(g.fullMaxX * 0.01, Math.min(span, g.fullMaxX));
+  const frac = curSpan ? (cursorX - g.vMin) / curSpan : 0.5;  // keep cursor over the same data point
+  let lo = cursorX - frac * span, hi = lo + span;
+  if (lo < 0) { lo = 0; hi = span; }
+  if (hi > g.fullMaxX) { hi = g.fullMaxX; lo = Math.max(0, hi - span); }
+  xView = (hi - lo >= g.fullMaxX - 1e-9) ? null : { min: lo, max: hi };
+  drawChart();
+  updateZoomUI();
 }
 
 function renderSummary() {
@@ -1034,6 +1126,7 @@ function render() {
   renderSummary();
   drawChart();
   renderContext();
+  updateZoomUI();
 }
 
 // ---------- exports (always the full history, so they double as a backup) ----------
@@ -1070,20 +1163,21 @@ function clearAll() {
   try { localStorage.removeItem(STORAGE_KEY); } catch (e) {}
   try { localStorage.removeItem(META_KEY); } catch (e) {}
   meta = {};
+  xView = null;
   selectedRunId = null;
   load();
   render();
 }
 
 // ---------- wire up ----------
-document.getElementById("runSelect").addEventListener("change", e => { selectedRunId = e.target.value; const r = selectedRun(); syncMedalInput(r); syncRunMeta(r); drawChart(); renderContext(); });
+document.getElementById("runSelect").addEventListener("change", e => { selectedRunId = e.target.value; const r = selectedRun(); syncMedalInput(r); syncRunMeta(r); xView = null; drawChart(); updateZoomUI(); renderContext(); });
 document.getElementById("medalPct").addEventListener("input", () => applyMedalEdit(false));
 document.getElementById("medalPct").addEventListener("change", () => applyMedalEdit(true));
 document.getElementById("runName").addEventListener("input", () => applyNameEdit(false));
 document.getElementById("runName").addEventListener("change", () => applyNameEdit(true));
 document.getElementById("runNotes").addEventListener("input", () => applyNotesEdit(false));
 document.getElementById("runNotes").addEventListener("change", () => applyNotesEdit(true));
-document.getElementById("refreshBtn").addEventListener("click", () => { load(); render(); });
+document.getElementById("refreshBtn").addEventListener("click", () => { xView = null; load(); render(); });
 document.getElementById("csvBtn").addEventListener("click", exportCsv);
 document.getElementById("jsonBtn").addEventListener("click", exportJson);
 document.getElementById("clearBtn").addEventListener("click", clearAll);
@@ -1091,6 +1185,10 @@ window.addEventListener("resize", () => { if (hasData()) hideHover(); });
 const hoverCanvas = document.getElementById("chart");
 hoverCanvas.addEventListener("mousemove", onChartMove);
 hoverCanvas.addEventListener("mouseleave", hideHover);
+hoverCanvas.addEventListener("mousedown", onChartDown);          // drag a span to zoom into it
+hoverCanvas.addEventListener("wheel", onChartWheel, { passive: false }); // scroll to zoom at the cursor
+hoverCanvas.addEventListener("dblclick", resetZoom);             // double-click to zoom back out
+document.getElementById("zoomReset").addEventListener("click", resetZoom);
 // live-update if the game tab writes new data
 window.addEventListener("storage", e => { if (e.key === STORAGE_KEY) { load(); render(); } });
 
