@@ -34,7 +34,7 @@
   }
   .group { display: flex; align-items: center; gap: 6px; }
   .group > .lbl { opacity: 0.7; }
-  select, button, input {
+  select, button, input, textarea {
     background: rgba(255, 224, 138, 0.08);
     color: #ffe08a;
     border: 1px solid rgba(255, 224, 138, 0.4);
@@ -44,6 +44,9 @@
     cursor: pointer;
   }
   select { padding-right: 22px; }
+  input[type="text"], input[type="number"], textarea { cursor: text; }
+  textarea { resize: vertical; width: 100%; box-sizing: border-box; min-height: 56px; line-height: 1.4; }
+  .runnotes { margin-top: 6px; white-space: pre-wrap; opacity: 0.85; font-size: 0.92em; border-left: 2px solid rgba(255,224,138,0.3); padding-left: 8px; }
   button:hover { background: rgba(255, 224, 138, 0.22); }
   button.danger { color: #ff9c9c; border-color: rgba(255, 107, 107, 0.5); }
   button.danger:hover { background: rgba(255, 107, 107, 0.18); }
@@ -77,6 +80,35 @@
   th { opacity: 0.7; font-weight: 600; }
   .empty { opacity: 0.6; padding: 40px 0; text-align: center; font-size: 14px; }
   .hint { opacity: 0.5; font-size: 12px; margin-top: 14px; }
+  .context-card {
+    border: 1px solid rgba(255, 224, 138, 0.22);
+    border-radius: 10px;
+    background: rgba(0, 0, 0, 0.4);
+    padding: 12px 14px;
+    margin-top: 14px;
+  }
+  .context-card .chead { font-size: 12px; opacity: 0.85; margin-bottom: 10px; }
+  .comparebar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 12px; font-size: 12px; }
+  .runchip { padding: 2px 9px; border: 1px solid rgba(255, 224, 138, 0.3); border-radius: 11px; cursor: pointer; user-select: none; }
+  .runchip:hover { background: rgba(255, 224, 138, 0.12); }
+  .runchip.on { background: rgba(255, 224, 138, 0.2); border-color: rgba(255, 224, 138, 0.6); font-weight: 600; }
+  .runchip.clear { border-color: rgba(255, 107, 107, 0.45); color: #ff9c9c; }
+  .ccols { display: flex; gap: 22px; align-items: flex-start; }
+  .ccols.multi { overflow-x: auto; padding-bottom: 6px; }
+  .ccol { flex: 1 1 auto; min-width: 0; }
+  .ccols.multi .ccol { flex: 0 0 320px; }
+  .cmetricrow { display: flex; gap: 16px; align-items: flex-start; }
+  .cmcol { display: flex; flex-direction: column; gap: 6px; }
+  .cgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px 14px; }
+  .ctile { border-left: 2px solid rgba(255, 224, 138, 0.25); padding: 2px 0 2px 8px; }
+  .ctile .clab { opacity: 0.55; font-size: 11px; }
+  .ctile .cval { font-size: 14px; font-weight: 600; }
+  .csection { margin-top: 10px; padding-top: 8px; border-top: 1px solid rgba(255, 224, 138, 0.14); }
+  .cteam { margin-top: 10px; padding-top: 8px; border-top: 1px solid rgba(255, 224, 138, 0.14); }
+  .hgrid { display: flex; flex-wrap: wrap; gap: 6px 8px; }
+  .htile { font-size: 12px; padding: 3px 7px; border: 1px solid rgba(255, 224, 138, 0.18); border-radius: 5px; background: rgba(255, 224, 138, 0.04); white-space: nowrap; display: inline-flex; align-items: center; gap: 5px; }
+  .uicon { height: 26px; width: auto; border-radius: 3px; vertical-align: middle; }
+  .cloadout { margin-top: 10px; padding-top: 8px; border-top: 1px solid rgba(255, 224, 138, 0.14); font-size: 12px; opacity: 0.75; }
 </style>
 </head>
 <body>
@@ -89,6 +121,10 @@
     <div class="group">
       <span class="lbl">Run</span>
       <select id="runSelect"></select>
+    </div>
+    <div class="group">
+      <span class="lbl">Name</span>
+      <input id="runName" type="text" maxlength="80" placeholder="(unnamed)" style="width:170px">
     </div>
     <div class="group">
       <span class="lbl">Medal&nbsp;%</span>
@@ -109,9 +145,19 @@
     <div class="legend" id="legend"></div>
   </div>
 
+  <div id="notesCard" class="chart-card" style="display:none;margin-top:14px">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+      <span class="lbl" style="opacity:.7">Notes</span>
+      <span class="lbl" id="notesFor" style="opacity:.5"></span>
+    </div>
+    <textarea id="runNotes" maxlength="2000" placeholder="Notes for the selected run…"></textarea>
+  </div>
+
+  <div id="contextCard" class="context-card" style="display:none"></div>
+
   <table id="summary" style="display:none">
     <thead>
-      <tr><th>Run</th><th>Started</th><th>Duration</th><th>Peak wave</th><th>Best MPM</th><th>Medal %</th><th>Samples</th></tr>
+      <tr><th>Run</th><th>Started</th><th>Duration</th><th>Peak wave</th><th>Castle</th><th>Best MPM</th><th>Medal %</th><th>Samples</th></tr>
     </thead>
     <tbody id="summaryBody"></tbody>
   </table>
@@ -128,6 +174,12 @@
 
 <script>
 const STORAGE_KEY = "__EF_SESSION_HISTORY__";
+// Per-run name/notes live in their OWN key that the recorder never reads or writes, so its
+// periodic writes to STORAGE_KEY can't clobber a rename/note (and there's no read-modify-write
+// race). Shape: { [runId]: { name, notes }, __v: 1 }. We attach these onto run objects on load
+// so the rest of the viewer can keep reading run.name / run.notes.
+const META_KEY = "__EF_SESSION_HISTORY_META__";
+let meta = {};
 // Both metrics are overlaid on one chart. Their scales differ wildly (medals/min
 // dwarfs waves/min), so each gets its own y-axis.
 const SERIES = [
@@ -147,6 +199,43 @@ function load() {
   } catch (e) {
     store = { runs: [] };
   }
+  // Back-compat: runs recorded before the gold/medal split stored the castle gold sum as
+  // `castleLevelSum`. Surface it under the current `castleGoldSum` key so those earlier runs
+  // still show a Gold Σ in the table and the compare view (instead of "—").
+  for (const r of store.runs) {
+    const c = r && r.ctx;
+    if (c && c.castleGoldSum == null && c.castleLevelSum != null) { c.castleGoldSum = c.castleLevelSum; }
+  }
+  loadMeta();
+}
+
+function saveMeta() { try { localStorage.setItem(META_KEY, JSON.stringify(meta)); } catch (e) {} }
+function loadMeta() {
+  try { const m = JSON.parse(localStorage.getItem(META_KEY) || "null"); meta = (m && typeof m === "object") ? m : {}; }
+  catch (e) { meta = {}; }
+  // one-time migration: recover names/notes that an earlier build wrote INTO the store itself
+  // (before this decoupled key existed), so existing renames aren't lost.
+  if (!meta.__v) {
+    for (const r of store.runs) {
+      if ((r.name || r.notes) && !meta[r.id]) { meta[r.id] = {}; if (r.name) meta[r.id].name = r.name; if (r.notes) meta[r.id].notes = r.notes; }
+    }
+    meta.__v = 1;
+    saveMeta();
+  }
+  // META is authoritative: (re)attach it onto run objects every load, so a recorder write that
+  // dropped the in-store copy can never make a rename/note disappear.
+  for (const r of store.runs) {
+    const m = meta[r.id];
+    if (m && m.name) r.name = m.name; else delete r.name;
+    if (m && m.notes) r.notes = m.notes; else delete r.notes;
+  }
+}
+// Set a run's name/notes in the authoritative META key (and mirror onto the run object for the
+// current render). Never writes STORAGE_KEY, so the recorder can't race or clobber it.
+function setRunField(run, field, value) {
+  if (value) { run[field] = value; (meta[run.id] = meta[run.id] || {})[field] = value; }
+  else { delete run[field]; const m = meta[run.id]; if (m) { delete m[field]; if (!m.name && !m.notes) delete meta[run.id]; } }
+  saveMeta();
 }
 
 function fmtClock(sec) {
@@ -181,10 +270,18 @@ function fmtMedals(v) {
   return parseFloat(r.toFixed(2)) + tierLetters(tier);
 }
 
+function esc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, c =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
 function fmtRunLabel(run) {
   const d = new Date(run.startedAtWall || 0);
   const stamp = isNaN(d.getTime()) ? "run " + run.id : d.toLocaleString();
-  return `#${run.id}  ${stamp}  (W${run.peakWave ?? "-"})`;
+  const mpmV = Number(run.bestMpm) * medalMult(run);
+  const mpm = (Number.isFinite(mpmV) && mpmV > 0) ? `  ·  ${fmtMedals(mpmV)} mpm` : "";
+  const base = `#${run.id}  ${stamp}  (W${run.peakWave ?? "-"})${mpm}`;
+  return run.name ? `${run.name} — ${base}` : base;
 }
 
 function runsWithData() {
@@ -233,6 +330,109 @@ function medalMult(run) {
   return p != null ? 1 + p / 100 : 1;
 }
 
+// ---------- Divine Blessing (priest +3 speed buff) inference ----------
+// We can't read the game's buff timer (it's closure-private and tamper-sealed),
+// but the in-game frame counter `bt` advances at +1 per 60 fps logic tick, and the
+// game runs those ticks faster at higher game speed. So the game-speed multiplier
+// is gameSpeed ≈ Δframes / (60 × ΔwallSeconds). Divine Blessing adds a discrete +3
+// to that multiplier for 120 s, so an unusually-LOW speed plateau = buff down.
+function btOf(s) {
+  const v = s ? s.bt : undefined;
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+// Per-interval game-speed multiplier between consecutive samples. Intervals that
+// span a battle reset (frame counter drops), a too-short gap, or an implausible
+// rate are dropped. x0/x1 are rebirth-time minutes (the chart's x units).
+const RELOAD_GAP_SEC = 20;   // a frame-counter reset across a wall gap this big = a reload (vs a stage change)
+const MAX_GAP_SEC = 300;     // ignore derived speed across very long idle / offline gaps
+function deriveSpeedIntervals(samples) {
+  const out = [];
+  let pendingReload = false;
+  for (let i = 1; i < samples.length; i++) {
+    const a = samples[i - 1], b = samples[i];
+    const bt0 = btOf(a), bt1 = btOf(b);
+    if (bt0 === null || bt1 === null) continue;
+    const dframes = bt1 - bt0;
+    const dwall = (Number(b.wall) - Number(a.wall)) / 1000;
+    if (!(dframes >= 0)) {                                   // frame counter reset
+      if (dwall > RELOAD_GAP_SEC) pendingReload = true;      // ...across a gap = a reload (Divine Blessing resets)
+      continue;
+    }
+    if (!(dwall > 0.5) || dwall > MAX_GAP_SEC) continue;     // bad / long-gap interval
+    const speed = dframes / (60 * dwall);
+    if (!Number.isFinite(speed) || speed > 100) continue;   // clock jump etc.
+    out.push({ x0: (Number(a.t) || 0) / 60, x1: (Number(b.t) || 0) / 60, speed, afterReload: pendingReload });
+    pendingReload = false;
+  }
+  return out;
+}
+
+const BATTLE_SPEED_FLOOR = 0.5;   // below this = not in an active battle (menu/idle)
+const MIN_PLATEAU_GAP = 2;        // the +3 buff must show at least this much spread
+// Classify in-battle intervals as buff-up vs buff-down by splitting the two speed
+// plateaus (which sit ~3 apart) at their midpoint, smoothing single-sample
+// flicker, then merging contiguous down intervals into spans. Returns ok:false
+// when there's no `bt` data or the buff state doesn't visibly vary (draw nothing
+// rather than guess).
+function detectBuffDown(intervals) {
+  const battle = intervals.filter(iv => iv.speed >= BATTLE_SPEED_FLOOR);
+  if (battle.length < 4) return { ok: false, spans: [] };
+  const sorted = battle.map(iv => iv.speed).slice().sort((a, b) => a - b);
+  const pct = q => sorted[Math.max(0, Math.min(sorted.length - 1, Math.round(q * (sorted.length - 1))))];
+  const lo = pct(0.20), hi = pct(0.80);
+  if (hi - lo < MIN_PLATEAU_GAP) return { ok: false, spans: [] };
+  const thresh = lo + (hi - lo) / 2;
+  const sp = battle.map(iv => iv.speed);
+  // Drift-aware split: a single run-wide threshold can't separate on/off once
+  // cumulative base drift (stat growth) reaches the +3 buff magnitude. Classify each
+  // interval against a LOCAL floor — the min over a window spanning a buff cycle — so
+  // the boundary follows the moving baseline. Where that window sees only one plateau
+  // (run edges, or a long single-state stretch) fall back to the global threshold, so
+  // a one-sided window never invents a down-state.
+  const W = 9; // ±9 intervals (~3 min at 10s/sample) — wide enough to span a cycle
+  const raw = sp.map((v, i) => {
+    let mn = Infinity, mx = -Infinity;
+    for (let j = Math.max(0, i - W); j <= Math.min(sp.length - 1, i + W); j++) {
+      if (sp[j] < mn) mn = sp[j];
+      if (sp[j] > mx) mx = sp[j];
+    }
+    return (mx - mn >= MIN_PLATEAU_GAP) ? v < mn + MIN_PLATEAU_GAP / 2 : v < thresh;
+  });
+  // median-of-3 smoothing kills single-sample flicker
+  const down = raw.map((v, i) => {
+    const a = i > 0 ? raw[i - 1] : v, c = i < raw.length - 1 ? raw[i + 1] : v;
+    return (a ? 1 : 0) + (v ? 1 : 0) + (c ? 1 : 0) >= 2;
+  });
+  // After a reload, Divine Blessing resets (it doesn't persist across loads), so the
+  // initial unbuffed stretch isn't a real lapse — don't flag it until the buff is seen
+  // UP again. Stage changes within a session keep the buff timer, so only reloads count.
+  let suppressing = false;
+  for (let i = 0; i < battle.length; i++) {
+    if (battle[i].afterReload) suppressing = true;
+    if (!down[i]) suppressing = false;        // buff seen up -> resume flagging real lapses
+    else if (suppressing) down[i] = false;    // suppress the post-reload leading-down
+  }
+  // merge contiguous down intervals into spans, but don't bridge a time gap
+  const spans = [];
+  const EPS = 0.05; // minutes (~3 s) tolerance for "adjacent"
+  for (let i = 0; i < battle.length; i++) {
+    if (!down[i]) continue;
+    const start = battle[i].x0;
+    let end = battle[i].x1;
+    while (i + 1 < battle.length && down[i + 1] && Math.abs(battle[i + 1].x0 - end) <= EPS) { i++; end = battle[i].x1; }
+    spans.push({ x0: start, x1: end });
+  }
+  return { ok: true, spans, thresh };
+}
+
+function inAnySpan(xMin, spans) {
+  for (const sp of spans) if (xMin >= sp.x0 - 1e-9 && xMin <= sp.x1 + 1e-9) return true;
+  return false;
+}
+
 function saveStore() {
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(store)); } catch (e) {}
 }
@@ -254,6 +454,43 @@ function applyMedalEdit(commit) {
   if (commit) syncMedalInput(run);
 }
 
+// Rename / note the selected run. Both save on every keystroke (so they survive a reload),
+// and refresh the places the label/notes appear on commit (blur/Enter). The edit fields live
+// in the toolbar / notes card (outside the re-rendered context), so they keep focus.
+function applyNameEdit(commit) {
+  const run = selectedRun();
+  if (!run) return;
+  const v = String(document.getElementById("runName").value).slice(0, 80).trim();
+  setRunField(run, "name", v || null);
+  if (commit) { renderRunSelect(); renderContext(); renderSummary(); syncRunMeta(run); }
+}
+function applyNotesEdit(commit) {
+  const run = selectedRun();
+  if (!run) return;
+  const v = String(document.getElementById("runNotes").value).slice(0, 2000);
+  setRunField(run, "notes", v.trim() ? v : null);   // keep internal whitespace, but clear if blank
+  if (commit) renderContext();   // refresh the read-only notes shown in the context block
+}
+// reflect the selected run's name/notes into the editable fields + notes-card heading
+function syncRunMeta(run) {
+  document.getElementById("runName").value = (run && run.name) ? run.name : "";
+  document.getElementById("runNotes").value = (run && run.notes) ? run.notes : "";
+  document.getElementById("notesFor").textContent = run ? ("#" + run.id + (run.name ? " · " + run.name : "")) : "";
+}
+
+// compare overlay, all solid lines: WARM shades = medals/min, COOL shades = waves/min
+// (so the two metrics read apart by temperature); each run is a distinct shade in its family.
+// Index 0 keeps the single-run gold/blue.
+const MEDAL_COLORS = ["#ffe08a", "#ff8c42", "#ff5c5c", "#ff6fae", "#e0b030", "#c97b3c", "#ffae00", "#ff4d8d"];
+const WAVE_COLORS  = ["#6bb8ff", "#3fd0c0", "#a07bff", "#4ec3ff", "#5fd08a", "#8090ff", "#36c2e0", "#b388ff"];
+// the runs to plot = the selected run + any toggled-in compares (same set as the context)
+function shownRunsForChart() {
+  const primary = selectedRun();
+  if (!primary) return [];
+  const others = runsWithData().filter(r => String(r.id) !== String(primary.id) && compareIds.has(String(r.id)));
+  return [primary].concat(others).sort((a, b) => (Number(a.id) || 0) - (Number(b.id) || 0));
+}
+
 function drawChart() {
   chartGeom = null;
   const canvas = document.getElementById("chart");
@@ -267,17 +504,27 @@ function drawChart() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, cssW, cssH);
 
-  const run = selectedRun();
-  if (!run) { legend.innerHTML = ""; return; }
-  const mult = medalMult(run);   // effective medals/min = raw × (1 + medal% / 100)
+  const shown = shownRunsForChart();
+  if (!shown.length) { legend.innerHTML = ""; return; }
+  const multi = shown.length > 1;
+  const run = shown[0];
+  const buff = multi ? { ok: false, spans: [] } : detectBuffDown(deriveSpeedIntervals(run.samples));
 
-  // one line per metric, both for this single run; x = minutes since rebirth
-  const series = SERIES.map(m => ({
-    key: m.key, label: m.label, color: m.color, axis: m.axis, fmt: m.fmt,
-    points: run.samples
-      .map(s => ({ x: (Number(s.t) || 0) / 60, t: Number(s.t) || 0, y: m.key === "mpm" ? metricVal(s.mpm) * mult : metricVal(s[m.key]), rec: s.rec }))
-      .filter(p => Number.isFinite(p.y))
-  })).filter(s => s.points.length);
+  // one line per (run, metric). Single run keeps the gold/blue look; in compare mode
+  // each RUN gets a colour, medals/min solid + waves/min dashed.
+  const series = [];
+  shown.forEach((r, ri) => {
+    const mult = medalMult(r);
+    SERIES.forEach(m => {
+      const points = r.samples
+        .map(s => ({ x: (Number(s.t) || 0) / 60, t: Number(s.t) || 0, y: m.key === "mpm" ? metricVal(s.mpm) * mult : metricVal(s[m.key]), rec: s.rec }))
+        .filter(p => Number.isFinite(p.y));
+      if (points.length) series.push({
+        runId: r.id, key: m.key, label: m.label, axis: m.axis, fmt: m.fmt,
+        color: (m.key === "mpm" ? MEDAL_COLORS : WAVE_COLORS)[ri % MEDAL_COLORS.length], points
+      });
+    });
+  });
 
   const padL = 64, padR = 64, padT = 14, padB = 34;
   const plotW = cssW - padL - padR;
@@ -305,11 +552,21 @@ function drawChart() {
 
   const haveLeft = series.some(s => s.axis === "left");
   const haveRight = series.some(s => s.axis === "right");
-  const leftColor = "#ffe08a";
-  const rightColor = "#6bb8ff";
+  const leftColor = multi ? "rgba(220,220,230,0.5)" : "#ffe08a";
+  const rightColor = multi ? "rgba(220,220,230,0.5)" : "#6bb8ff";
 
   const xPix = x => padL + (maxX ? (x / maxX) * plotW : 0);
   const yPix = (y, axis) => padT + plotH - (axisMax[axis] ? (y / axisMax[axis]) * plotH : 0);
+
+  // shade stretches where Divine Blessing (the priest +3 speed buff) looks absent
+  if (buff.ok && buff.spans.length) {
+    ctx.fillStyle = "rgba(255,107,107,0.12)";
+    for (const sp of buff.spans) {
+      const sx = Math.max(padL, xPix(sp.x0));
+      const ex = Math.min(cssW - padR, xPix(sp.x1));
+      if (ex > sx) ctx.fillRect(sx, padT, ex - sx, plotH);
+    }
+  }
 
   // gridlines + a y-axis on each side
   ctx.font = "11px monospace";
@@ -357,7 +614,7 @@ function drawChart() {
     ctx.fillText("Waves/min", 0, 0); ctx.restore();
   }
 
-  // the two lines
+  // the lines — all solid; metric reads by colour temperature (warm medals / cool waves)
   ctx.lineWidth = 2;
   for (const s of series) {
     ctx.strokeStyle = s.color;
@@ -367,21 +624,20 @@ function drawChart() {
       if (idx === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
     });
     ctx.stroke();
-    // mark "rebirth recommended" points
-    ctx.fillStyle = "#ff6b6b";
-    for (const p of s.points) {
-      if (p.rec === "rebirth") {
-        ctx.beginPath(); ctx.arc(xPix(p.x), yPix(p.y, s.axis), 2.5, 0, Math.PI * 2); ctx.fill();
+    if (!multi) {   // mark "rebirth recommended" points (single run only)
+      ctx.fillStyle = "#ff6b6b";
+      for (const p of s.points) {
+        if (p.rec === "rebirth") { ctx.beginPath(); ctx.arc(xPix(p.x), yPix(p.y, s.axis), 2.5, 0, Math.PI * 2); ctx.fill(); }
       }
     }
   }
 
-  // peak marker + value on each line (the run's max for that metric)
+  // ringed peak marker + value label on every line (each run's max for that metric)
   const peaks = {};
   for (const s of series) {
     const peak = s.points.reduce((b, p) => (p.y > b.y ? p : b), s.points[0]);
     s.peak = peak;
-    peaks[s.key] = peak;
+    if (!multi) { peaks[s.key] = peak; }
     const px = xPix(peak.x), py = yPix(peak.y, s.axis);
     ctx.strokeStyle = s.color; ctx.lineWidth = 2.5;
     ctx.beginPath(); ctx.arc(px, py, 6, 0, Math.PI * 2); ctx.stroke();
@@ -392,20 +648,57 @@ function drawChart() {
     ctx.fillText(s.fmt(peak.y), Math.max(padL + 18, Math.min(cssW - padR - 18, px)), ly);
   }
 
-  // legend (with each line's peak value + time, for the at-a-glance readout)
-  legend.innerHTML = series.map(s => {
-    const peakStr = s.peak ? ` &middot; peak <b>${s.fmt(s.peak.y)}</b> @ ${fmtClock(s.peak.t)}` : "";
-    return `<span class="item"><span class="swatch" style="background:${s.color}"></span>${s.label} (${s.axis === "left" ? "left" : "right"})${peakStr}</span>`;
-  }).join("") + `<span class="item" style="opacity:.7"><span class="swatch" style="background:#ff6b6b"></span>rebirth advised</span>`;
+  // legend
+  if (!multi) {
+    legend.innerHTML = series.map(s => {
+      const peakStr = s.peak ? ` &middot; peak <b>${s.fmt(s.peak.y)}</b> @ ${fmtClock(s.peak.t)}` : "";
+      return `<span class="item"><span class="swatch" style="background:${s.color}"></span>${s.label} (${s.axis === "left" ? "left" : "right"})${peakStr}</span>`;
+    }).join("")
+      + `<span class="item" style="opacity:.7"><span class="swatch" style="background:#ff6b6b"></span>rebirth advised</span>`
+      + (buff.ok && buff.spans.length
+          ? `<span class="item" style="opacity:.7"><span class="swatch" style="background:rgba(255,107,107,0.32)"></span>priest buff down</span>`
+          : "");
+  } else {
+    const grp = (label, colors, key) => `<span class="item">${label}:` +
+      shown.map((r, ri) => {
+        const sr = series.find(s => s.runId === r.id && s.key === key);
+        const pk = sr && sr.peak ? " <b>" + sr.fmt(sr.peak.y) + "</b>" : "";
+        return `<span class="swatch" style="background:${colors[ri % colors.length]};margin-left:7px"></span>#${r.id}${pk}`;
+      }).join("") + `</span>`;
+    legend.innerHTML = grp("Medals/min", MEDAL_COLORS, "mpm") + grp("Waves/min", WAVE_COLORS, "wpm");
+  }
 
-  // remember the geometry so hover can map a mouse x back to the nearest sample
-  chartGeom = {
-    rows: run.samples.map(s => ({
-      t: Number(s.t) || 0, x: (Number(s.t) || 0) / 60,
-      mpm: metricVal(s.mpm) * mult, wpm: metricVal(s.wpm), wave: metricVal(s.wave), rec: s.rec
-    })),
-    peaks, xPix, yPix, padL, padR, padT, plotH, plotW, cssW, cssH
-  };
+  // remember the geometry so hover can map a mouse x back to the nearest sample(s)
+  if (!multi) {
+    const mult = medalMult(run);
+    chartGeom = {
+      multi: false,
+      rows: run.samples.map(s => ({
+        t: Number(s.t) || 0, x: (Number(s.t) || 0) / 60,
+        mpm: metricVal(s.mpm) * mult, wpm: metricVal(s.wpm), wave: metricVal(s.wave), rec: s.rec,
+        buffDown: buff.ok && inAnySpan((Number(s.t) || 0) / 60, buff.spans)
+      })),
+      peaks, xPix, yPix, padL, padR, padT, plotH, plotW, cssW, cssH
+    };
+  } else {
+    chartGeom = {
+      multi: true,
+      runs: shown.map((r, ri) => {
+        const mult = medalMult(r);
+        const rows = r.samples.map(s => ({ t: Number(s.t) || 0, x: (Number(s.t) || 0) / 60, mpm: metricVal(s.mpm) * mult, wpm: metricVal(s.wpm) }));
+        let mpmPeak = null, wpmPeak = null;
+        for (const row of rows) {
+          if (Number.isFinite(row.mpm) && (mpmPeak === null || row.mpm > mpmPeak)) mpmPeak = row.mpm;
+          if (Number.isFinite(row.wpm) && (wpmPeak === null || row.wpm > wpmPeak)) wpmPeak = row.wpm;
+        }
+        return {
+          id: r.id, color: MEDAL_COLORS[ri % MEDAL_COLORS.length], waveColor: WAVE_COLORS[ri % WAVE_COLORS.length],
+          mpmPeak, wpmPeak, rows
+        };
+      }),
+      xPix, yPix, padL, padR, padT, plotH, plotW, cssW, cssH
+    };
+  }
 }
 
 // ---------- hover ----------
@@ -450,6 +743,7 @@ function showTooltip(row) {
   html += `<div>${dot("#ffe08a")}Medals/min: <b>${Number.isFinite(row.mpm) ? fmtMedals(row.mpm) : "-"}</b>${maxInfo("mpm", row.mpm, fmtMedals)}</div>`;
   html += `<div>${dot("#6bb8ff")}Waves/min: <b>${Number.isFinite(row.wpm) ? fmtNum(row.wpm) : "-"}</b>${maxInfo("wpm", row.wpm, fmtNum)}</div>`;
   if (Number.isFinite(row.wave)) html += `<div style="opacity:.7;margin-top:2px">Wave ${row.wave}</div>`;
+  if (row.buffDown) html += `<div style="color:#ff8a8a;margin-top:2px">⚠ Divine Blessing down</div>`;
   tip.innerHTML = html;
   tip.style.display = "block";
   const px = g.xPix(row.x);
@@ -466,19 +760,68 @@ function hideHover() {
   if (chartGeom) drawChart();
 }
 
+function nearestInRows(rows, mx) {
+  let best = null, bestD = Infinity;
+  for (const r of rows) { const d = Math.abs(chartGeom.xPix(r.x) - mx); if (d < bestD) { bestD = d; best = r; } }
+  return best;
+}
+function drawHoverMarksMulti(mx) {
+  const g = chartGeom;
+  const ctx = document.getElementById("chart").getContext("2d");
+  ctx.save();
+  ctx.strokeStyle = "rgba(255,255,255,0.35)"; ctx.lineWidth = 1; ctx.setLineDash([4, 3]);
+  ctx.beginPath(); ctx.moveTo(mx, g.padT); ctx.lineTo(mx, g.padT + g.plotH); ctx.stroke();
+  ctx.setLineDash([]);
+  for (const rr of g.runs) {
+    const row = nearestInRows(rr.rows, mx);
+    if (!row) continue;
+    if (Number.isFinite(row.mpm)) { ctx.fillStyle = rr.color; ctx.beginPath(); ctx.arc(g.xPix(row.x), g.yPix(row.mpm, "left"), 4, 0, Math.PI * 2); ctx.fill(); }
+    if (Number.isFinite(row.wpm)) { ctx.fillStyle = rr.waveColor; ctx.beginPath(); ctx.arc(g.xPix(row.x), g.yPix(row.wpm, "right"), 4, 0, Math.PI * 2); ctx.fill(); }
+  }
+  ctx.restore();
+}
+function showTooltipMulti(mx) {
+  const g = chartGeom;
+  const canvas = document.getElementById("chart"), tip = document.getElementById("tooltip");
+  const dot = c => `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${c};margin-right:5px"></span>`;
+  let timeRow = null;
+  for (const rr of g.runs) { const row = nearestInRows(rr.rows, mx); if (row && (!timeRow || Math.abs(g.xPix(row.x) - mx) < Math.abs(g.xPix(timeRow.x) - mx))) timeRow = row; }
+  const maxInfo = (val, peak) => {
+    if (peak == null || !Number.isFinite(val)) return "";
+    if (val >= peak) return ' <span style="opacity:.85">◆</span>';
+    return ` <span style="opacity:.5">${peak ? Math.round(((val - peak) / peak) * 100) : 0}%</span>`;
+  };
+  let html = `<div style="opacity:.75;margin-bottom:3px">⏱ ${timeRow ? fmtClock(timeRow.t) : "-"}</div>`;
+  for (const rr of g.runs) {
+    const row = nearestInRows(rr.rows, mx);
+    const mpmV = row ? row.mpm : NaN, wpmV = row ? row.wpm : NaN;
+    const mpm = Number.isFinite(mpmV) ? fmtMedals(mpmV) : "-";
+    const wpm = Number.isFinite(wpmV) ? fmtNum(wpmV) : "-";
+    html += `<div>${dot(rr.color)}Run #${rr.id}: <b>${mpm}</b>${maxInfo(mpmV, rr.mpmPeak)} <span style="color:${rr.waveColor}">· ${wpm} w/min${maxInfo(wpmV, rr.wpmPeak)}</span></div>`;
+  }
+  tip.innerHTML = html; tip.style.display = "block";
+  let left = canvas.offsetLeft + mx + 16;
+  if (left + tip.offsetWidth > canvas.offsetLeft + g.cssW - 4) left = canvas.offsetLeft + mx - tip.offsetWidth - 16;
+  left = Math.max(canvas.offsetLeft, Math.min(left, canvas.offsetLeft + g.cssW - tip.offsetWidth - 4));
+  tip.style.left = left + "px";
+  tip.style.top = (canvas.offsetTop + g.padT + 6) + "px";
+}
+
 function onChartMove(e) {
-  if (!chartGeom || !chartGeom.rows.length) return;
+  if (!chartGeom) return;
   const canvas = document.getElementById("chart");
   const rect = canvas.getBoundingClientRect();
-  const mx = e.clientX - rect.left;
-  const my = e.clientY - rect.top;
+  const mx = e.clientX - rect.left, my = e.clientY - rect.top;
   const g = chartGeom;
   if (mx < g.padL || mx > g.cssW - g.padR || my < g.padT || my > g.padT + g.plotH) { hideHover(); return; }
-  const row = nearestRow(mx);
-  if (!row) { hideHover(); return; }
-  drawChart();          // redraw the base chart
-  drawHoverMarks(row);  // crosshair + dots
-  showTooltip(row);
+  if (g.multi) {
+    drawChart(); drawHoverMarksMulti(mx); showTooltipMulti(mx);
+  } else {
+    if (!g.rows.length) { hideHover(); return; }
+    const row = nearestRow(mx);
+    if (!row) { hideHover(); return; }
+    drawChart(); drawHoverMarks(row); showTooltip(row);
+  }
 }
 
 function renderSummary() {
@@ -489,11 +832,14 @@ function renderSummary() {
     const last = samples[samples.length - 1];
     const dur = last ? fmtClock(Number(last.t)) : "-";
     const d = new Date(run.startedAtWall || 0);
+    const ctx = run.ctx || {};
+    const cell = (v, fmt) => Number.isFinite(Number(v)) ? fmt(Number(v)) : "-";
     return `<tr>
-      <td>#${run.id}</td>
+      <td>#${run.id}${run.name ? ` · <span style="opacity:.85">${esc(run.name)}</span>` : ""}${run.notes ? ` <span title="${esc(run.notes)}" style="opacity:.55">📝</span>` : ""}</td>
       <td>${isNaN(d.getTime()) ? "-" : d.toLocaleString()}</td>
       <td>${dur}</td>
       <td>${run.peakWave ?? "-"}</td>
+      <td>${Number(ctx.castleGoldSum) > 0 ? fmtNum(Number(ctx.castleGoldSum)) : "-"}</td>
       <td>${fmtMedals(Number(run.bestMpm) * medalMult(run))}</td>
       <td>${pctOf(run) != null ? pctOf(run) + "%" : "-"}</td>
       <td>${samples.length}</td>
@@ -518,10 +864,165 @@ function syncMedalInput(run) {
   document.getElementById("medalMult").textContent = m !== 1 ? "×" + (Math.round(m * 100) / 100) : "";
 }
 
+// ---------- per-run context (each run shown on its own; compare multiple by choice) ----------
+const CTX_FIELDS = [
+  { key: "maxWave",         label: "Max wave",          fmt: fmtNum    },
+  { key: "numRevive",       label: "Revives",           fmt: fmtNum    },
+  { key: "accuMedal",       label: "Medals (lifetime)", fmt: fmtMedals },
+  { key: "bestMedalPerMin", label: "Best medal/min",    fmt: fmtMedals }
+];
+const CASTLE_FIELDS = [
+  { key: "castleGoldSum",  label: "Gold Σ",  fmt: fmtNum },   // per-run: gold-bought levels, reset each rebirth
+  { key: "castleEnhance",  label: "Enhance", fmt: fmtNum }    // persistent: medal enhancement stat
+  // castleMedalSum ("Medal Σ") still captured by the recorder, just not displayed for now
+];
+let compareIds = new Set();   // extra run ids whose context to show beside the selected run
+// `dashZero`: keep the tile but show "—" for a non-positive value (a real castle is
+// never 0, so 0 means "no reliable data" — show it rather than dropping the row, so the
+// field still lines up across compared runs).
+function tilesFor(fields, ctx, dashZero) {
+  return fields
+    .filter(f => Number.isFinite(Number(ctx[f.key])))
+    .map(f => {
+      const v = Number(ctx[f.key]);
+      const disp = (dashZero && v <= 0) ? "-" : f.fmt(v);
+      return `<div class="ctile"><div class="clab">${f.label}</div><div class="cval">${disp}</div></div>`;
+    })
+    .join("");
+}
+function castleSection(ctx) {
+  const tiles = tilesFor(CASTLE_FIELDS, ctx, true);   // 0 = no reliable data, not a real castle value
+  return tiles ? `<div class="csection"><div class="clab" style="margin-bottom:5px">Castle</div><div class="cgrid">${tiles}</div></div>` : "";
+}
+
+// ---- unit names: fetched from the game's own served locale (works in-runtime;
+// falls back to "#kind" anywhere the game assets aren't served, e.g. standalone). ----
+let unitNames = null;
+function buildUnitNameMap(loc) {
+  const map = {};
+  if (loc && typeof loc === "object") {
+    const PRE = "UNIT_NAME_";
+    for (const k in loc) {
+      if (k.indexOf(PRE) === 0) {
+        const id = k.slice(PRE.length);
+        if (/^\d+$/.test(id)) map[id] = loc[k];
+      }
+    }
+  }
+  return map;
+}
+function unitLabel(kind) {
+  const n = unitNames && unitNames[kind];
+  return n ? n : ("#" + kind);
+}
+
+// kindNum -> EFUnits image basename (auto-matched from unit names; II/III variants
+// share a base image). User-supplied art lives in EFUnits/ next to this file and is
+// kept local (never committed). Edit freely to fix any mismatch.
+const UNIT_ICON = {2:"HA", 4:"Gunner", 7:"EA", 8:"EW", 9:"PA", 10:"HEA", 11:"GE", 12:"WM", 13:"SS", 14:"DM", 15:"Ghost", 16:"SW", 18:"DS", 19:"OF", 20:"OH", 21:"FrostMage", 22:"OW", 24:"OH", 25:"WR", 27:"HA", 29:"Gunner", 32:"EA", 33:"EW", 34:"PA", 35:"HEA", 36:"GE", 37:"WM", 38:"SS", 39:"DM", 40:"Ghost", 41:"SW", 43:"DS", 44:"OF", 45:"OH", 46:"IM", 47:"OW", 49:"OH", 50:"WR", 53:"fairy", 54:"fairy", 55:"priest", 56:"priest", 57:"DA", 58:"DA", 59:"DK", 60:"DK", 62:"golem", 63:"hod", 65:"ent", 66:"FM", 67:"IM", 68:"bomber", 71:"golem", 72:"hod", 74:"ent", 75:"FM", 76:"IM", 77:"bomber", 82:"SP", 85:"SP", 89:"WK", 90:"Sylphid", 91:"AM", 92:"Wyvern", 93:"WK", 94:"Sylphid", 95:"AM", 96:"Wyvern", 30001:"OF", 50002:"SS"};
+// <img> for a unit's art; onerror removes it where EFUnits/ isn't served (standalone),
+// leaving the name. Returns "" for unmapped units.
+function iconImg(kind) {
+  const f = UNIT_ICON[kind];
+  return f ? `<img class="uicon" src="EFUnits/${f}.png" alt="" onerror="this.remove()">` : "";
+}
+async function loadUnitNames() {
+  if (unitNames) return;
+  try {
+    const res = await fetch("assets/locales/en.json", { cache: "force-cache" });
+    if (!res.ok) return;
+    unitNames = buildUnitNameMap(await res.json());
+    if (hasData()) renderContext();   // re-render so names replace the #kind fallback
+  } catch (e) { /* standalone / offline: keep #kind */ }
+}
+
+// the deployed unit roster (10 slots) with each unit's level / enhance / trans
+function teamRoster(ctx) {
+  if (!Array.isArray(ctx.team) || !ctx.team.length) return "";
+  // highest combined gold level (lvl) + medal level (enh) first, then by gold level
+  const tiles = ctx.team.slice()
+    .sort((a, b) => ((b.lvl || 0) + (b.enh || 0)) - ((a.lvl || 0) + (a.enh || 0)) || (b.lvl || 0) - (a.lvl || 0))
+    .map(h => {
+    let badge = `Lv${h.lvl}`;
+    if (h.enh) badge += ` +${h.enh}`;
+    if (h.tr) badge += ` T${h.tr}`;
+    return `<span class="htile">${iconImg(h.kind)}<span>${unitLabel(h.kind)} <b>${badge}</b></span></span>`;
+  }).join("");
+  return `<div class="cteam"><div class="clab" style="margin-bottom:5px">Units running (${ctx.team.length})</div><div class="hgrid">${tiles}</div></div>`;
+}
+
+// one run's context column — just its own values, no comparison/deltas.
+// `compact` (compare mode): put castle in a column right of the metrics to save height.
+function contextBlock(run, compact) {
+  const ctx = run.ctx || {};
+  const d = new Date(run.startedAtWall || 0);
+  const when = isNaN(d.getTime()) ? "" : d.toLocaleString();
+  const wave = run.peakWave != null ? " · W" + run.peakWave : "";
+  const metrics = tilesFor(CTX_FIELDS, ctx);
+  const castleTiles = tilesFor(CASTLE_FIELDS, ctx, true);
+  const lo = [];
+  if (Number.isFinite(Number(ctx.tribe))) lo.push(`Tribe <b>${ctx.tribe}</b>`);
+  if (ctx.activeSkills) lo.push(`Skills <b>${ctx.activeSkills}</b>`);
+  const loadout = lo.length ? `<div class="cloadout">${lo.join(" &nbsp;·&nbsp; ")}</div>` : "";
+  let top = "";
+  if (compact) {
+    if (metrics || castleTiles) {
+      const castleCol = castleTiles ? `<div class="cmcol"><div class="clab" style="margin-bottom:5px">Castle</div>${castleTiles}</div>` : "";
+      top = `<div class="cmetricrow">${metrics ? `<div class="cmcol">${metrics}</div>` : ""}${castleCol}</div>`;
+    }
+  } else {
+    top = `${metrics ? `<div class="cgrid">${metrics}</div>` : ""}${castleSection(ctx)}`;
+  }
+  const parts = [top, teamRoster(ctx), loadout].filter(Boolean);
+  const body = parts.join("") || `<div style="opacity:.5">No context captured for this run.</div>`;
+  const title = run.name ? `${esc(run.name)} <span style="opacity:.5">· #${run.id}</span>` : `Run #${run.id}`;
+  const notes = run.notes ? `<div class="runnotes">${esc(run.notes)}</div>` : "";
+  return `<div class="ccol"><div class="chead">${title} <span style="opacity:.55">${when}${wave}</span></div>${body}${notes}</div>`;
+}
+
+function renderContext() {
+  const card = document.getElementById("contextCard");
+  const runs = runsWithData();
+  const primary = selectedRun();
+  if (!primary) { card.style.display = "none"; return; }
+  card.style.display = "block";
+  // opt-in compare: a dropdown (like the run selector up top) ADDS a run to the comparison;
+  // the chosen runs show as removable chips next to it.
+  const others = runs.filter(r => String(r.id) !== String(primary.id));
+  const addable = others.filter(r => !compareIds.has(String(r.id)));
+  const selected = others.filter(r => compareIds.has(String(r.id)));
+  const opts = ['<option value="">＋ Compare with a run…</option>']
+    .concat(addable.slice().reverse().map(r => `<option value="${r.id}">${esc(fmtRunLabel(r))}</option>`)).join("");  // newest first, like the top selector
+  const picker = addable.length
+    ? `<select id="compareSelect">${opts}</select>`
+    : `<span style="opacity:.4">${others.length ? "all runs compared" : "no other runs"}</span>`;
+  const chips = selected.map(r =>
+    `<span class="runchip on" data-id="${r.id}" title="Remove from comparison">${r.name ? esc(r.name) : "#" + r.id} ✕</span>`
+  ).join("");
+  const bar = `<div class="comparebar"><span style="opacity:.7">Compare with:</span>${picker}${chips}`
+    + (compareIds.size ? `<span class="runchip clear" data-id="">clear</span>` : "")
+    + `</div>`;
+  const shown = [primary].concat(selected);
+  shown.sort((a, b) => (Number(a.id) || 0) - (Number(b.id) || 0));
+  card.innerHTML = bar + `<div class="ccols${shown.length > 1 ? " multi" : ""}">${shown.map(r => contextBlock(r, shown.length > 1)).join("")}</div>`;
+  const cs = card.querySelector("#compareSelect");
+  if (cs) cs.addEventListener("change", () => {
+    if (cs.value) { compareIds.add(cs.value); drawChart(); renderContext(); }
+  });
+  card.querySelectorAll(".runchip").forEach(el => el.addEventListener("click", () => {
+    const id = el.getAttribute("data-id");
+    if (el.classList.contains("clear")) compareIds.clear();
+    else compareIds.delete(id);   // chips only REMOVE now; the dropdown adds
+    drawChart();        // overlay/peel the compared run(s) on the graph
+    renderContext();
+  }));
+}
+
 function render() {
   const has = hasData();
   document.getElementById("controls").style.display = has ? "flex" : "none";
   document.getElementById("chartCard").style.display = has ? "block" : "none";
+  document.getElementById("notesCard").style.display = has ? "block" : "none";
   document.getElementById("summary").style.display = has ? "table" : "none";
   document.getElementById("hint").style.display = has ? "block" : "none";
   document.getElementById("empty").style.display = has ? "none" : "block";
@@ -529,8 +1030,10 @@ function render() {
   const run = selectedRun();    // resolve the default selection before drawing
   renderRunSelect();
   syncMedalInput(run);
+  syncRunMeta(run);
   renderSummary();
   drawChart();
+  renderContext();
 }
 
 // ---------- exports (always the full history, so they double as a backup) ----------
@@ -544,14 +1047,14 @@ function download(name, text, type) {
 }
 
 function exportCsv() {
-  const cols = ["run", "t_sec", "wall_iso", "wave", "maxWave", "mpm", "bestMpm", "wpm", "waveSec", "done", "skip", "rec"];
+  const cols = ["run", "t_sec", "wall_iso", "wave", "maxWave", "mpm", "bestMpm", "wpm", "waveSec", "done", "skip", "rec", "bt"];
   const rows = [cols.join(",")];
   for (const run of store.runs) {
     for (const s of run.samples || []) {
       rows.push([
         run.id, s.t ?? "", s.wall ? new Date(s.wall).toISOString() : "",
         s.wave ?? "", s.maxWave ?? "", s.mpm ?? "", s.bestMpm ?? "",
-        s.wpm ?? "", s.waveSec ?? "", s.done ?? "", s.skip ?? "", s.rec ?? ""
+        s.wpm ?? "", s.waveSec ?? "", s.done ?? "", s.skip ?? "", s.rec ?? "", s.bt ?? ""
       ].join(","));
     }
   }
@@ -565,15 +1068,21 @@ function exportJson() {
 function clearAll() {
   if (!confirm("Delete all recorded session history? This cannot be undone.")) return;
   try { localStorage.removeItem(STORAGE_KEY); } catch (e) {}
+  try { localStorage.removeItem(META_KEY); } catch (e) {}
+  meta = {};
   selectedRunId = null;
   load();
   render();
 }
 
 // ---------- wire up ----------
-document.getElementById("runSelect").addEventListener("change", e => { selectedRunId = e.target.value; syncMedalInput(selectedRun()); drawChart(); });
+document.getElementById("runSelect").addEventListener("change", e => { selectedRunId = e.target.value; const r = selectedRun(); syncMedalInput(r); syncRunMeta(r); drawChart(); renderContext(); });
 document.getElementById("medalPct").addEventListener("input", () => applyMedalEdit(false));
 document.getElementById("medalPct").addEventListener("change", () => applyMedalEdit(true));
+document.getElementById("runName").addEventListener("input", () => applyNameEdit(false));
+document.getElementById("runName").addEventListener("change", () => applyNameEdit(true));
+document.getElementById("runNotes").addEventListener("input", () => applyNotesEdit(false));
+document.getElementById("runNotes").addEventListener("change", () => applyNotesEdit(true));
 document.getElementById("refreshBtn").addEventListener("click", () => { load(); render(); });
 document.getElementById("csvBtn").addEventListener("click", exportCsv);
 document.getElementById("jsonBtn").addEventListener("click", exportJson);
@@ -587,6 +1096,7 @@ window.addEventListener("storage", e => { if (e.key === STORAGE_KEY) { load(); r
 
 load();
 render();
+loadUnitNames();
 </script>
 </body>
 </html>

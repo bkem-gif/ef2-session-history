@@ -37,12 +37,16 @@ import "./history.js";
 //    (just after it calls overlay.update(...)), publish that sample:
 window.__EF_WAVE_SAMPLE__ = {
     wave, maxWave, rebirthTimeSec, currentMpm, bestMpm,
-    wpm, wpmReady, waveTimeSec, completedWaves, skippedWaves, recommendation
+    wpm, wpmReady, waveTimeSec, completedWaves, skippedWaves, recommendation,
+    battleTime: this.battleTime   // the controller's in-game frame counter
 };
 ```
 
-Those names are the variables already in scope at that point in `index.js`. The recorder polls this
-global, de-dups, throttles, and self-persists — there's no other wiring (no `flush()`, no API surface).
+Those names are the variables already in scope at that point in `index.js`, and `this` is the battle
+controller the wrapper runs on (so `this.battleTime` is right there). `battleTime` is optional — leave it
+out and everything still works, you just won't get the priest-buff shading described below. The recorder
+polls this global, de-dups, throttles, and self-persists — there's no other wiring (no `flush()`, no API
+surface).
 
 **3. Add the viewer.** Copy `history.html` into your runtime's `web/` folder so it's served
 **same-origin** as the game (it must share the game page's `localStorage`). Open it at, e.g.,
@@ -68,6 +72,28 @@ node history.test.js     # drives the recorder with synthetic samples; exits non
   last 30 runs are kept and long runs are decimated to stay within the storage quota.
 - **Viewer.** `history.html` reads `localStorage["__EF_SESSION_HISTORY__"]` and renders the charts.
   Same-origin with the game is required so they share storage.
+- **Priest-buff (Divine Blessing) shading.** When the optional `battleTime` field is published, the viewer
+  shades the stretches where Divine Blessing looks **down**. The buff's exact timer is closure-private and
+  tamper-sealed inside the game, so it can't be read — but `battleTime` is an in-game frame counter that
+  advances at the game-speed multiplier, and Divine Blessing adds a discrete **+3** to that multiplier for
+  120 s. So `gameSpeed ≈ Δframes / (60 × Δwall-seconds)`, and a sustained low-speed plateau means the buff
+  is off. It's an **inference**: an on/off signal during active battle, not the exact %, and it shows
+  nothing when there's no `battleTime` data or the speed never clearly varies.
+- **Run context.** The recorder also observes `JSON.parse` (read-only) to snapshot a small,
+  **identity-free** slice of the server-synced state onto each run — **long-term progression only**:
+  lifetime medals, max wave, revives, best medal/min, tribe, the `activeSkills` loadout, the castle
+  (per-run **gold** levels + persistent **medal** levels + enhance), and the deployed unit roster (each
+  unit's gold level / medal enhance / transcend). Spendable currencies and `vip` are deliberately **not**
+  kept — they churn with spending and aren't meaningful run-to-run. Each run is its own **frozen snapshot**
+  (gold levels reset at each rebirth, so they're captured as that run's peak); rather than computing deltas,
+  the viewer shows runs **side by side on demand** — pick others from the **Compare with** dropdown to
+  overlay them on the chart and line up their context. You can also **name** a run and keep free-text
+  **notes** on it. Unit **names** come from the game's own served locale (`UNIT_NAME_<kind>`, falls back to
+  `#kind`). Identity fields (`userId` / `name` / `accountId` / …) are never in the allowlist, never stored.
+- **Unit icons (optional, local only).** Drop unit images into an `EFUnits/` folder next to `history.html`,
+  named by the abbreviation in the `UNIT_ICON` map at the top of the viewer's script (e.g. `WM.png`,
+  `EA.png`, `fairy.png`). The roster then shows each unit's art. `EFUnits/` is **gitignored** — game art is
+  yours to supply locally, not redistributed here; with no folder, the roster just shows names.
 - **Read-only.** It observes the tracker's output and saves it locally; it never sends an action or a
   network request.
 
