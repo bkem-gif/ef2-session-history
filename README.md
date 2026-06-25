@@ -125,11 +125,11 @@ after your edit, you most likely have a typo — delete the block you pasted in 
 *Nice-to-have: add a button in the tracker's `overlay.js` that opens `history.html`, so you don't have to
 type the address.*
 
-### Unit pictures (optional)
-The roster shows unit **names** by default. If you'd also like little unit icons, drop image files into an
-`EFUnits/` folder next to `history.html`, named by the codes in the `UNIT_ICON` list near the top of
-`history.html` (e.g. `WM.png`, `fairy.png`). No folder just means names only. Game art isn't included
-here — that's yours to add locally.
+### Unit pictures
+Unit icons ship in the **`EFUnits/`** folder, so the roster shows little portraits out of the box. They're
+named by the codes in the `UNIT_ICON` map near the top of `history.html` (e.g. `WM.png`, `fairy.png`) — see
+[`EFUnits/ICON-MAP.md`](EFUnits/ICON-MAP.md) for the full code→unit list. (Delete the folder and the roster
+falls back to plain unit names.)
 
 ## Check the recorder logic (optional, for developers)
 
@@ -166,5 +166,7 @@ The Wave Tracker is part of the **EF2 Browser Runtime by Rokhan**
 
 ## License
 
-[MIT](LICENSE). Endless Frontier 2 game content and the EF2 Browser Runtime are not included or
-redistributed here; obtain the runtime separately and use it under its author's terms.
+This project's own code (`history.js`, `history.html`) is [MIT](LICENSE). The unit images in `EFUnits/` are
+**Endless Frontier 2 game art, © its developer** — bundled here for convenience and **not** covered by the MIT
+license; all rights remain with the game's owner. The EF2 Browser Runtime is not included; obtain it
+separately and use it under its author's terms.
