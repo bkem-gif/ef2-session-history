@@ -119,7 +119,7 @@ everything else still works — only the charts stay empty.)
 
 ## License
 
-The code here (`plugin.js`, `recorder.js`, `history.html`, `history.js`) is [MIT](LICENSE). The unit images
+The code here (`plugin.js`, `recorder.js`, `history.html`) is [MIT](LICENSE). The unit images
 in `EFUnits/` are **Endless Frontier 2 game art, © its developer** — bundled for convenience and **not**
 covered by the MIT license. The EF2 Browser Runtime is by **Rokhan**
 (<https://github.com/Rokhanhh/EF2-Browser-Runtime>); get it separately and use it under its author's terms.
