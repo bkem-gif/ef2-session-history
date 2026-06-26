@@ -1,0 +1,7 @@
+{
+  "id": "session-history",
+  "name": "Session History",
+  "enabled": true,
+  "entry": "plugin.js",
+  "handleKey": "__EF_SESSION_HISTORY_HANDLE__"
+}
