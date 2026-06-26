@@ -1,67 +1,86 @@
-# EF2 Session History — runtime plugin
+# EF2 Session History
 
-Track your **Endless Frontier 2** runs over time. A small, **read-only** recorder + viewer for the EF2
-Browser Runtime: it records the numbers per run, saves them in your browser, and draws them on a page you
-can open anytime. **It only ever reads your own game — it never makes a move, spends anything, or sends a
-network request.**
+Track your **Endless Frontier 2** runs over time. A small, **read-only** add-on for the EF2 Browser
+Runtime: it quietly records the numbers from each rebirth run, saves them in your browser, and shows
+them on a page you can open anytime. **It only ever reads your own game — it never makes a move, spends
+anything, or sends anything anywhere.**
 
-> This is the **plugin** form for the current EF2 Browser Runtime (its browser-plugin architecture). The
-> older form — a `history.js` you imported into Rokhan's Wave Tracker by hand — is on the **`main`** branch.
+---
+
+> ## 📊 Open your history page here:
+>
+> ### `http://localhost:8080/__ef_plugins__/session-history/history.html`
+>
+> Use the **same web address you play the game at** — same `localhost`, same port. Most people play at
+> `http://localhost:8080/...`, so the address above is right. If your game is on a different port (the
+> number after `localhost:`), use that same number here. **Bookmark this page.** Your runs appear after
+> you've played for a bit.
+
+---
 
 ## What you get
 
 One entry per **rebirth run**, and for each run:
 
 - **Charts** — medals/min and waves/min across the whole run, with each line's peak marked.
-- **Run context** — a snapshot of where you were that run: max wave, revives, lifetime medals, best
-  medal/min, your tribe and active skills, the **castle** (gold levels, medal levels, enhance), and your
-  **deployed unit roster** with each unit's gold level, medal level, and transcend (with portraits).
-- **Name & notes** — give a run a name and jot notes on it (e.g. "new DK build", "lucky blessing").
-- **Compare runs** — overlay other runs on the chart and line up their context side by side.
-- **Priest-buff shading** — shades the stretches where Divine Blessing looks like it was *down* (inferred
-  from game speed; see [How it works](#how-it-works)).
+- **Run details** — max wave, revives, lifetime medals, best medal/min, your tribe and active skills, your
+  **castle** (gold levels, medal levels, enhance), and your **deployed unit roster** with each unit's gold
+  level, medal level, and transcend — shown with unit portraits.
+- **Name & notes** — name a run and jot notes on it ("new DK build", "lucky blessing").
+- **Compare runs** — overlay other runs on the chart and line up their details side by side.
 - **Export** — download everything as CSV or JSON.
 
-Everything lives in your browser's local storage — your data, on your machine. Nothing leaves your computer.
+Everything stays in your browser. Nothing leaves your computer.
 
-## Install
+---
 
-You need the plugin-capable **EF2 Browser Runtime** (Rokhan's project, obtained separately — see
-[Attribution](#why-a-plugin-not-a-fork)). Below, **`<runtime>`** is the folder where it lives.
+## Installing / updating to the new plugin version
 
-**1. Drop this folder into the runtime's `plugins/`, named `session-history/`:**
+The EF2 Browser Runtime now loads add-ons from a **`plugins`** folder. This makes Session History **much
+easier** to set up than the old version — **no copying files into the Wave Tracker, and no pasting code.**
 
-```sh
-cp -R <this-repo> <runtime>/plugins/session-history
+> **Did you use the old version?** (Back then you copied `history.js` next to the Wave Tracker's
+> `index.js`, put `history.html` in the `web` folder, and pasted a snippet.) **You don't need any of that
+> anymore.** Just update your runtime to the latest version and follow the three steps below. The old
+> files won't break anything — they're simply no longer used.
+
+### Just three steps
+
+1. **Download this add-on.** Near the top of this page, make sure the branch button says **`plugin`**, then
+   click the green **`< > Code`** button → **Download ZIP**. Unzip the file you get — inside is a folder of
+   files, including one named `plugin.json`.
+
+2. **Put the folder into your runtime.** Find your **EF2 Browser Runtime** folder, open the **`plugins`**
+   folder inside it, and drop the unzipped folder in there — **renamed to `session-history`**. When you're
+   done it should look like this:
+
+   ```
+   …/EF2-Browser-Runtime/plugins/session-history/plugin.json
+   …/EF2-Browser-Runtime/plugins/session-history/history.html
+   …/EF2-Browser-Runtime/plugins/session-history/  (and the rest)
+   ```
+
+3. **Restart the runtime** — close it and start it again. That's it. It's now recording in the background
+   while you play.
+
+Then open your history page at the address in the box near the top. ⬆️
+
+---
+
+## Want the charts? One small, optional edit
+
+The **run details** (roster, castle, progression) record on their own — nothing extra needed. The
+**charts** (medals/min and waves/min) need **one line** added to the Wave Tracker, because the runtime
+doesn't share those moment-to-moment numbers by default.
+
+Open this file in a **plain text editor** (Notepad on Windows, TextEdit on Mac — please not Word):
+
+```
+…/EF2-Browser-Runtime/plugins/wave-tracker/index.js
 ```
 
-The runtime discovers it from `plugin.json`. Restart the runtime's local server (it logs active plugin
-ids at startup). Enable/disable anytime via `plugin.json`'s `"enabled"`.
-
-**2. Open the viewer** at your game's address with this path appended:
-
-```
-http://localhost:<port>/__ef_plugins__/session-history/history.html
-```
-
-It's served from the runtime (same origin as the game), which is how it reads the same saved data. Your
-runs appear as soon as you've played one.
-
-That's the whole recorder — no more importing `history.js` or pasting into the tracker. **One** optional
-step enables the wave/MPM **charts**:
-
-### For the wave/MPM charts: one line in the Wave Tracker plugin
-
-The recorder gets your **run context** (progression, roster, castle) on its own. The **time-series**
-(medals/min and waves/min over the run) is computed by the Wave Tracker, which doesn't publish it by
-default. To enable the charts, add one line where the wave-tracker plugin computes its per-loop metrics.
-Open (in a plain-text editor):
-
-```
-<runtime>/plugins/wave-tracker/index.js
-```
-
-Find the `overlay.setBattle({ … });` call, and **right after** its closing `});` paste:
+Use Find (Ctrl-F / ⌘F) to locate **`overlay.setBattle({`**. It's followed by a list that ends with a line
+that's just `});`. **Right after that `});`**, paste this block:
 
 ```js
 window.__EF_WAVE_SAMPLE__ = {
@@ -80,62 +99,27 @@ window.__EF_WAVE_SAMPLE__ = {
 };
 ```
 
-Restart the runtime. The block's **left-hand names** are what the recorder expects; the **right-hand
-values** are the wave-tracker's own variables at that spot — if a future runtime renames one, match the
-names you see inside the `setBattle({ … })` right above. (The recorder also listens for a `wave:sample`
-runtime event, so if a future Wave Tracker emits one you won't need this edit.) **Without it, run-context
-history still records — only the wave/MPM charts stay empty.**
+Save the file and restart the runtime. The charts fill in as you play. (If a future runtime renames a
+variable, just match the names you see inside the `setBattle({ … })` right above. Without this edit,
+everything else still works — only the charts stay empty.)
 
-### Unit pictures
-
-Unit icons ship in the **`EFUnits/`** folder and are served alongside the viewer, so the roster shows
-portraits out of the box. They're named by the codes in the `UNIT_ICON` map near the top of `history.html`
-(e.g. `WM.png`, `fairy.png`) — see [`EFUnits/ICON-MAP.md`](EFUnits/ICON-MAP.md) for the full code→unit
-list. (Delete the folder and the roster falls back to plain unit names.)
-
-## Files
-
-| File | Purpose |
-|------|---------|
-| `plugin.json` | plugin manifest (id, entry, handle) |
-| `plugin.js` | plugin entry — installs the recorder via the runtime API |
-| `recorder.js` | the recorder: run segmentation, read-only run-context capture, persistence to `__EF_SESSION_HISTORY__` |
-| `history.html` | the viewer — charts, run comparison, unit-icon roster |
-| `EFUnits/` | unit icons (EF2 game art; see License) + `ICON-MAP.md` |
-| `history.js` | the older Wave-Tracker-addon form (for the pre-plugin runtime; unused by the plugin) |
-| `history.test.js` | `node history.test.js` — runs the recorder against synthetic data |
+---
 
 ## How it works
 
-- **Read, don't push.** This plugin runs entirely in the browser, read-only. `plugin.js` installs the
-  recorder; the recorder reads run context through the runtime's sanctioned `runtime.hooks.onJsonParse`
-  (the runtime owns the single `JSON.parse` wrap), and reads the per-loop wave/MPM numbers from
-  `window.__EF_WAVE_SAMPLE__` (or a `wave:sample` runtime event). Nothing in the game is changed, only
-  observed.
-- **Runs & storage.** It records at most one data point every 2 seconds, starts a new run when the rebirth
-  clock resets, keeps the most recent 30 runs, and trims very long runs so it stays small. Saved in
-  `localStorage` under `__EF_SESSION_HISTORY__`.
-- **Run context.** A small, **identity-free** slice is snapshotted onto each run — long-term progression
-  only (lifetime medals, max wave, revives, best medal/min, tribe, skills, castle, unit roster). Spendable
-  currencies and account identifiers are deliberately never stored. Each run is a **frozen snapshot**: gold
-  levels (units and castle) reset every rebirth, so they're captured as that run's peak.
-- **Priest-buff (Divine Blessing) shading.** The buff timer can't be read, but the `battleTime` frame
-  counter advances faster at higher game speed, and Divine Blessing adds a fixed **+3** speed for 120 s.
-  The viewer infers when the buff was *down* from a sustained low-speed stretch and shades it — a
-  best-effort on/off signal, not an exact percentage, and it draws nothing without `battleTime`.
-- **Read-only, always.** It observes and saves locally; it never sends an action or a network request.
-
-## Why a plugin, not a fork
-
-The Wave Tracker is part of the **EF2 Browser Runtime by Rokhan**
-(<https://github.com/Rokhanhh/EF2-Browser-Runtime>) — this repo ships **none** of it. Only the plugin
-(`plugin.js`, `recorder.js`, `history.html`) is original code (MIT); you drop it into the runtime you
-already have. The one optional line above is an edit to *your* copy of the wave-tracker plugin, not
-included here.
+- **Read, don't touch.** This add-on runs in your browser and only *watches* the game through the
+  runtime's official plugin tools. It never changes the game — it just observes and saves.
+- **Runs & storage.** It saves at most one data point every couple of seconds, starts a new run when you
+  rebirth, keeps your most recent 30 runs, and stores it all in your browser under
+  `__EF_SESSION_HISTORY__`.
+- **Run details.** It snapshots a small, **identity-free** slice of your progression each run (lifetime
+  medals, max wave, revives, tribe, skills, castle, roster). Spendable currencies and any account
+  identifiers are **never** stored.
+- **Read-only, always.** It never sends an action or a network request.
 
 ## License
 
-This project's own code (`plugin.js`, `recorder.js`, `history.html`, `history.js`) is [MIT](LICENSE). The
-unit images in `EFUnits/` are **Endless Frontier 2 game art, © its developer** — bundled for convenience
-and **not** covered by the MIT license; all rights remain with the game's owner. The EF2 Browser Runtime is
-not included; obtain it separately and use it under its author's terms.
+The code here (`plugin.js`, `recorder.js`, `history.html`, `history.js`) is [MIT](LICENSE). The unit images
+in `EFUnits/` are **Endless Frontier 2 game art, © its developer** — bundled for convenience and **not**
+covered by the MIT license. The EF2 Browser Runtime is by **Rokhan**
+(<https://github.com/Rokhanhh/EF2-Browser-Runtime>); get it separately and use it under its author's terms.
