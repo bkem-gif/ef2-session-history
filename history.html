@@ -318,6 +318,17 @@ function niceCeil(value) {
   return nice * base;
 }
 
+// The x-axis (rebirth time) needs a TIGHTER ceiling than the y-axes. niceCeil's
+// coarse 1/2/5 steps stretch a ~205-min run all the way to 500 (frac 2.05 -> 5),
+// wasting more than half the width. Round up to a fine, clean minute step instead,
+// leaving only a little headroom so the last point isn't flush against the edge.
+function niceCeilTime(value) {
+  if (value <= 0) return 1;
+  const base = 10 ** Math.floor(Math.log10(value));   // 1, 10, 100 …
+  const step = base / 5;                               // fine sub-tick: 0.2, 2, 20 …
+  return Math.ceil((value * 1.05) / step) * step;      // ~5% headroom, snapped up to the step
+}
+
 // null / "" / missing -> NaN, so a not-yet-measured value is a gap on the line
 // and "-" in the tooltip, never a real 0.
 function metricVal(v) {
@@ -549,7 +560,7 @@ function drawChart() {
   // full x extent of the data (the default, unzoomed domain)
   let dataMaxX = 0;
   for (const s of series) for (const p of s.points) if (p.x > dataMaxX) dataMaxX = p.x;
-  const fullMaxX = niceCeil(Math.max(dataMaxX, 0.1));
+  const fullMaxX = niceCeilTime(Math.max(dataMaxX, 0.1));
   // visible x window (zoom): clamp the saved view to the data
   const vMin = xView ? Math.max(0, Math.min(xView.min, fullMaxX)) : 0;
   const vMax = xView ? Math.min(fullMaxX, Math.max(xView.max, vMin + 1e-6)) : fullMaxX;
