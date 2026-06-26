@@ -231,6 +231,31 @@ export function installSessionHistory(runtime) {
         persist(now);
     }
 
+    // The Wave Tracker plugin (runtime v0.5.3+) emits its per-loop sample as `wave:sample`,
+    // carrying the object it renders to its overlay — a NESTED shape (medalMpmState/bestMpmState).
+    // Flatten that to the flat shape record() reads. A flat sample (the legacy __EF_WAVE_SAMPLE__
+    // global, or an older publish) passes through unchanged. The tracker's object carries no
+    // battleTime, so the viewer's game-speed / Divine-Blessing inference is simply skipped for it.
+    function adaptWaveSample(s) {
+        if (!s || typeof s !== "object" || !(s.medalMpmState || s.bestMpmState)) { return s; }
+        var medal = s.medalMpmState || {};
+        var best = s.bestMpmState || {};
+        return {
+            wave: s.wave,
+            maxWave: s.maxWave,
+            rebirthTimeSec: s.rebirthTimeSec,
+            currentMpm: medal.currentMpm,
+            bestMpm: best.mpm,
+            wpm: s.wpm,
+            wpmReady: s.wpmReady,
+            waveTimeSec: s.waveTimeSec,
+            completedWaves: s.completedWaves,
+            skippedWaves: s.skippedWaves,
+            recommendation: medal.recommendation,
+            battleTime: s.battleTime
+        };
+    }
+
     window.__EF_SESSION_HISTORY_DATA__ = store;
 
     // --- read-only run context from the server-synced body.user --------------------
@@ -405,7 +430,7 @@ export function installSessionHistory(runtime) {
     function pollOnce() {
         try {
             var s = window[SAMPLE_GLOBAL];
-            if (s && s !== lastSeen) { lastSeen = s; record(s); }
+            if (s && s !== lastSeen) { lastSeen = s; record(adaptWaveSample(s)); }
         } catch (error) {
             // Recording must never break gameplay.
         }
@@ -416,11 +441,11 @@ export function installSessionHistory(runtime) {
     window.__EF_SESSION_HISTORY_TICK__ = pollOnce;
 
     var pollTimer = (typeof setInterval === "function") ? setInterval(pollOnce, config.pollIntervalMs) : null;
-    // Preferred path: if the Wave Tracker plugin emits a per-loop sample as a runtime event,
-    // record it directly. Falls back to the __EF_WAVE_SAMPLE__ poll above (the existing one-line
-    // publish). See the plugin README for wiring the wave-tracker.
+    // Preferred path (runtime v0.5.3+): the Wave Tracker plugin emits its per-loop sample as the
+    // `wave:sample` runtime event; adaptWaveSample() flattens its nested shape. The __EF_WAVE_SAMPLE__
+    // poll above stays as a fallback for older runtimes whose wave-tracker doesn't publish the event.
     var unsubscribeSample = (runtime && runtime.events && typeof runtime.events.on === "function")
-        ? runtime.events.on("wave:sample", function (sample) { try { if (sample) { record(sample); } } catch (error) {} })
+        ? runtime.events.on("wave:sample", function (sample) { try { if (sample) { record(adaptWaveSample(sample)); } } catch (error) {} })
         : function () {};
     // Persist promptly when the page is hidden or closed (replaces an explicit flush).
     function onVisibilityChange() { if (document.visibilityState === "hidden") { flush(); } }

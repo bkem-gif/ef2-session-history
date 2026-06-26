@@ -67,11 +67,13 @@ Then open your history page at the address in the box near the top. ⬆️
 
 ---
 
-## Want the charts? One small, optional edit
+## The charts
 
-The **run details** (roster, castle, progression) record on their own — nothing extra needed. The
-**charts** (medals/min and waves/min) need **one line** added to the Wave Tracker, because the runtime
-doesn't share those moment-to-moment numbers by default.
+**On runtime v0.5.3 or newer, the charts just work** — the Wave Tracker now publishes its per-loop
+medals/min and waves/min automatically, and Session History records them. Nothing to set up.
+
+**Only on older runtimes** (before v0.5.3) does the Wave Tracker not share those moment-to-moment
+numbers, so you'd add **one line** to it by hand:
 
 Open this file in a **plain text editor** (Notepad on Windows, TextEdit on Mac — please not Word):
 
