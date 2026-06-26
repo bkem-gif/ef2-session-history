@@ -11,10 +11,10 @@ anything, or sends anything anywhere.**
 >
 > ### `http://localhost:8080/__ef_plugins__/session-history/history.html`
 >
-> Use the **same web address you play the game at** — same `localhost`, same port. Most people play at
-> `http://localhost:8080/...`, so the address above is right. If your game is on a different port (the
-> number after `localhost:`), use that same number here. **Bookmark this page.** Your runs appear after
-> you've played for a bit.
+> Use the **same `localhost` and port** as the game (the number after `localhost:` — most people play at
+> `http://localhost:8080/...`, so the address above is right). Just paste the **whole address above** into
+> your browser; if your game uses a different port, change `8080` to match. **Bookmark this page** — your
+> runs appear after you've played for a bit.
 
 ---
 
@@ -80,7 +80,8 @@ Open this file in a **plain text editor** (Notepad on Windows, TextEdit on Mac �
 ```
 
 Use Find (Ctrl-F / ⌘F) to locate **`overlay.setBattle({`**. It's followed by a list that ends with a line
-that's just `});`. **Right after that `});`**, paste this block:
+that's just `});`. **If you already see a `window.__EF_WAVE_SAMPLE__ = { … }` block just below it, you're
+done — don't add a second copy.** Otherwise, **right after that `});`**, paste this block:
 
 ```js
 window.__EF_WAVE_SAMPLE__ = {
