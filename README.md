@@ -46,8 +46,8 @@ easier** to set up than the old version — **no copying files into the Wave Tra
 
 ### Just three steps
 
-1. **Download this add-on.** Near the top of this page, make sure the branch button says **`plugin`**, then
-   click the green **`< > Code`** button → **Download ZIP**. Unzip the file you get — inside is a folder of
+1. **Download this add-on.** Near the top of this page, click the green **`< > Code`** button →
+   **Download ZIP**. Unzip the file you get — inside is a folder of
    files, including one named `plugin.json`.
 
 2. **Put the folder into your runtime.** Find your **EF2 Browser Runtime** folder, open the **`plugins`**
