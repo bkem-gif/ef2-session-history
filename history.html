@@ -133,12 +133,14 @@
       <span class="lbl" id="medalMult"></span>
     </div>
     <div class="group" style="margin-left:auto">
+      <button id="settingsBtn" title="Show / hide chart features">&#9881; Settings</button>
       <button id="refreshBtn">Refresh</button>
       <button id="csvBtn">Export CSV</button>
       <button id="jsonBtn">Export JSON</button>
       <button id="clearBtn" class="danger">Clear</button>
     </div>
   </div>
+  <div id="settingsPanel" class="chart-card" style="display:none;margin-top:10px"></div>
 
   <div id="chartCard" class="chart-card" style="display:none">
     <canvas id="chart"></canvas>
@@ -209,6 +211,48 @@ function glowLoop(now) {
 }
 glowLoop._last = 0;
 requestAnimationFrame(glowLoop);
+
+// --- display settings: per-feature on/off toggles (persisted per device) -----------
+const SETTINGS_KEY = "__EF_SESSION_HISTORY_SETTINGS__";
+const FEATURES = [
+  { key: "recordLine", label: "Record line",         desc: "dashed bar at your all-time best medals/min" },
+  { key: "glow",       label: "Beating-record glow", desc: "pulsing green highlight where you beat your record" },
+  { key: "ghost",      label: "Record-run ghost",    desc: "faint trace of your record run, to race its pace" },
+  { key: "badge",      label: "Record badge",        desc: "the “beat record / % of record” tag in the legend" },
+];
+function loadSettings() {
+  try { const s = JSON.parse(localStorage.getItem(SETTINGS_KEY) || "null"); return (s && typeof s === "object") ? s : {}; }
+  catch (e) { return {}; }
+}
+let settings = loadSettings();
+function saveSettings() { try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (e) {} }
+function feat(key) { return settings[key] !== false; }   // default ON unless explicitly disabled
+
+function renderSettingsPanel() {
+  const panel = document.getElementById("settingsPanel");
+  if (!panel) return;
+  panel.innerHTML =
+    '<div style="font-weight:700;margin-bottom:4px">Chart features</div>' +
+    '<div style="font-size:11px;opacity:.55;margin-bottom:10px">Turn off anything you don’t want on the chart. Saved on this device.</div>' +
+    FEATURES.map(f =>
+      '<label style="display:flex;align-items:flex-start;gap:8px;padding:5px 0;cursor:pointer">' +
+        '<input type="checkbox" data-feat="' + f.key + '"' + (feat(f.key) ? " checked" : "") + ' style="margin-top:2px">' +
+        '<span><span style="font-weight:600">' + f.label + '</span>' +
+        '<span style="display:block;font-size:11px;opacity:.55">' + f.desc + '</span></span>' +
+      '</label>'
+    ).join("");
+  panel.querySelectorAll("input[data-feat]").forEach(cb => cb.addEventListener("change", () => {
+    settings[cb.getAttribute("data-feat")] = cb.checked;
+    saveSettings();
+    drawChart();
+  }));
+}
+function toggleSettings() {
+  const panel = document.getElementById("settingsPanel");
+  if (!panel) return;
+  if (panel.style.display === "none") { renderSettingsPanel(); panel.style.display = ""; }
+  else { panel.style.display = "none"; }
+}
 
 function load() {
   try {
@@ -592,8 +636,9 @@ function drawChart() {
   const recordEntry = (Array.isArray(store.records) && store.records.length) ? store.records[0] : null;
   const ghostRun = (recordEntry && recordEntry.runId != null && (!run || run.id !== recordEntry.runId))
     ? store.runs.find(r => r.id === recordEntry.runId) : null;
-  // keep the record line on-screen even when this run's peak is below it
-  axisMax.left = niceCeil(Math.max(axisMax.left, 1, Number.isFinite(recordMpm) ? recordMpm : 0));
+  // keep the record line on-screen even when this run's peak is below it (only if it's shown)
+  const wantRecordY = Number.isFinite(recordMpm) && (feat("recordLine") || feat("glow"));
+  axisMax.left = niceCeil(Math.max(axisMax.left, 1, wantRecordY ? recordMpm : 0));
   axisMax.right = niceCeil(Math.max(axisMax.right, 1));
 
   const haveLeft = series.some(s => s.axis === "left");
@@ -666,7 +711,7 @@ function drawChart() {
   ctx.beginPath(); ctx.rect(padL, padT, plotW, plotH); ctx.clip();
 
   // ghost line — your current record run's medals/min, faint + dashed, so you race its pace
-  if (ghostRun && Array.isArray(ghostRun.samples)) {
+  if (ghostRun && Array.isArray(ghostRun.samples) && feat("ghost")) {
     const gmult = medalMult(ghostRun);
     ctx.save();
     ctx.strokeStyle = "rgba(255,214,130,0.55)"; ctx.lineWidth = 2; ctx.setLineDash([5, 4]);
@@ -701,7 +746,7 @@ function drawChart() {
   // GLOW — where medals/min rises ABOVE your record you're setting a new record; make it
   // unmissable. Clip to the band above the record line and re-stroke the line with a pulsing
   // green glow. The pulse comes from glowLoop re-running drawChart with a shifting GLOW_PHASE.
-  if (Number.isFinite(recordMpm) && recordMpm < axisMax.left) {
+  if (Number.isFinite(recordMpm) && recordMpm < axisMax.left && feat("glow")) {
     const mpmS = series.find(s => s.key === "mpm");
     const recY = yPix(recordMpm, "left");
     const above = mpmS && mpmS.points.some(p => Number.isFinite(p.y) && p.y > recordMpm
@@ -760,7 +805,7 @@ function drawChart() {
   }
 
   // RECORD LINE — your all-time best medals/min: the bar to beat. Bright, dashed, on top.
-  if (Number.isFinite(recordMpm) && recordMpm <= axisMax.left) {
+  if (Number.isFinite(recordMpm) && recordMpm <= axisMax.left && feat("recordLine")) {
     const ry = yPix(recordMpm, "left");
     let when = "";
     try { if (recordEntry && recordEntry.at) { const d = new Date(recordEntry.at); if (!isNaN(d)) when = " · " + d.toLocaleDateString(); } } catch (e) {}
@@ -782,7 +827,7 @@ function drawChart() {
     // record badge: is THIS run a record? did its peak beat the record? how close?
     let recordBadge = "";
     const mpmPk = (series.find(s => s.key === "mpm") || {}).peak;
-    if (Number.isFinite(recordMpm) && mpmPk && Number.isFinite(mpmPk.y)) {
+    if (Number.isFinite(recordMpm) && mpmPk && Number.isFinite(mpmPk.y) && feat("badge")) {
       const rank = (Array.isArray(store.records) && run)
         ? store.records.findIndex(e => e && e.runId === run.id) + 1 : 0;
       if (rank >= 1) {
@@ -1307,6 +1352,7 @@ document.getElementById("refreshBtn").addEventListener("click", () => { xView = 
 document.getElementById("csvBtn").addEventListener("click", exportCsv);
 document.getElementById("jsonBtn").addEventListener("click", exportJson);
 document.getElementById("clearBtn").addEventListener("click", clearAll);
+document.getElementById("settingsBtn").addEventListener("click", toggleSettings);
 window.addEventListener("resize", () => { if (hasData()) hideHover(); });
 const hoverCanvas = document.getElementById("chart");
 hoverCanvas.addEventListener("mousemove", onChartMove);
