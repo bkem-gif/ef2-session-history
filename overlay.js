@@ -3,8 +3,8 @@
  *
  * A small, draggable, transparent HUD that shows your all-time Soul Rest record
  * (bestMedalPerMin — the value idle income is paid on), your LIVE medals/min versus it,
- * a reminder to swap to your medal relics, and a glowing "ABOVE RECORD — bank it!" cue
- * the moment your live rate beats the record (a pure comparison — no projection).
+ * a caution to swap to your medal relics, and a green glow the moment your live rate
+ * beats the record (a pure comparison — no projection).
  *
  * Data is read-only: live medals/min from the Wave Tracker's `wave:sample` event, and the
  * record from the recorder's captured account (window.__EF_SESSION_HISTORY_ACCOUNT__, with the
@@ -56,14 +56,13 @@ export function installSessionOverlay(runtime) {
             "#" + ID + " .hd{display:flex;align-items:center;gap:6px;font-weight:700;font-size:10px;letter-spacing:.07em;opacity:.8;margin-bottom:4px}" +
             "#" + ID + " .x{cursor:pointer;opacity:.55;font-size:14px;line-height:1;padding:0 2px}#" + ID + " .x:hover{opacity:1}" +
             "#" + ID + " .rec{font-size:23px;font-weight:800;color:#ffe08a;line-height:1.05}" +
-            "#" + ID + " .relic{font-size:10px;color:#bdb39a;margin:3px 0 7px}" +
+            "#" + ID + " .relic{font-size:10px;color:#e8c266;margin-top:8px;text-align:center}" +
             "#" + ID + " .now{display:flex;justify-content:space-between;align-items:baseline;font-size:12px;gap:6px}" +
             "#" + ID + " .now b{font-weight:700;color:#f4ecd8}" +
             "#" + ID + " .pct{opacity:.7}" +
             "#" + ID + " .bar{height:5px;border-radius:3px;background:rgba(255,255,255,.10);margin-top:5px;overflow:hidden}" +
             "#" + ID + " .fill{height:100%;border-radius:3px;background:linear-gradient(90deg,#ffd27a,#ffe08a);transition:width .25s}" +
             "#" + ID + ".above .rec{color:#aaffc4}#" + ID + ".above .fill{background:linear-gradient(90deg,#6bffa0,#aaffc4)}" +
-            "#" + ID + " .bank{margin-top:7px;font-weight:800;font-size:12px;color:#aaffc4;text-align:center;text-shadow:0 0 8px rgba(120,255,160,.6)}" +
             "#" + ID + ".min .body{display:none}";
         document.head.appendChild(s);
     }
@@ -118,11 +117,10 @@ export function installSessionOverlay(runtime) {
         const pct = haveLive ? Math.min(999, Math.round(liveMpm / record * 100)) : null;
         const fill = haveLive ? Math.min(100, liveMpm / record * 100) : 0;
         let html = '<div class="rec">' + fmtMedals(record) + '</div>';
-        if (feat("overlayRelic")) html += '<div class="relic">↻ swap to your medal relics</div>';
         html += '<div class="now"><span style="opacity:.7">now</span><b>' + (haveLive ? fmtMedals(liveMpm) : "—") + '</b>'
             + '<span class="pct">' + (pct != null ? pct + "%" : "") + '</span></div>'
             + '<div class="bar"><div class="fill" style="width:' + fill + '%"></div></div>';
-        if (above) html += '<div class="bank">▲ ABOVE RECORD +' + ((liveMpm / record - 1) * 100).toFixed(1) + '% — bank it!</div>';
+        if (feat("overlayRelic")) html += '<div class="relic">⚠️ swap to your medal relics</div>';
         body.innerHTML = html;
     }
 
