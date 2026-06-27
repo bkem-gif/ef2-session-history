@@ -88,6 +88,7 @@ export function installSessionHistory(runtime) {
     }
 
     var store = loadStore();
+    if (!Array.isArray(store.records)) { store.records = []; } // record-setting runs, newest first, max 5 (never auto-deleted)
     var currentRun = store.runs[store.runs.length - 1] || null;
     var pendingCtx = null; // next run's snapshot, built from revive-payload(s) before startRun materialises that run
     var lastSampleAt = 0;
@@ -132,7 +133,7 @@ export function installSessionHistory(runtime) {
         } catch (error) {
             // If we hit the quota, drop the oldest run and try once more.
             if (store.runs.length > 1) {
-                store.runs.shift();
+                if (!dropOldestNonRecord()) { store.runs.shift(); } // free space, sparing record runs first
                 try {
                     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
                 } catch (retryError) {
@@ -141,6 +142,50 @@ export function installSessionHistory(runtime) {
             }
         }
         window.__EF_SESSION_HISTORY_DATA__ = store;
+    }
+
+    // --- record-setting runs ----------------------------------------------------------
+    // The all-time bestMedalPerMin is locked in AT REVIVE; the run that achieved it is a
+    // "record run". We keep the newest MAX_RECORDS of them, NEVER delete them in cleanup, and
+    // order them so the viewer can show "current record / previous #2.." and compare runs.
+    var MAX_RECORDS = 5;
+
+    function recordRunIds() {
+        var ids = {};
+        for (var i = 0; i < store.records.length; i++) {
+            var rid = store.records[i] && store.records[i].runId;
+            if (rid != null) { ids[rid] = true; }
+        }
+        return ids;
+    }
+    // Remove the single oldest NON-record run; true if one was removed.
+    function dropOldestNonRecord() {
+        var prot = recordRunIds();
+        for (var i = 0; i < store.runs.length; i++) {
+            if (!prot[store.runs[i].id]) { store.runs.splice(i, 1); return true; }
+        }
+        return false;
+    }
+    // Keep at most config.maxRuns NON-record runs; record runs are always retained on top.
+    function trimRuns() {
+        var prot = recordRunIds();
+        var nonRecord = 0;
+        for (var i = 0; i < store.runs.length; i++) { if (!prot[store.runs[i].id]) { nonRecord++; } }
+        while (nonRecord > config.maxRuns && dropOldestNonRecord()) { nonRecord--; }
+    }
+    // A new all-time record V was set at `at`. Attribute it to the run whose recorded peak best
+    // matches V (the one that set it), prepend it, keep the newest MAX_RECORDS.
+    function tagRecordRun(V, at) {
+        if (store.records.length && Math.abs(Number(store.records[0].mpm) - V) < 1) { return; } // dedupe repeated syncs
+        var match = null, bestDelta = Infinity;
+        for (var i = store.runs.length - 1; i >= 0; i--) {
+            var peak = Number(store.runs[i].bestMpm);
+            if (!Number.isFinite(peak) || peak <= 0) { continue; }
+            var d = Math.abs(peak - V);
+            if (d < bestDelta && d <= V * 0.25) { bestDelta = d; match = store.runs[i]; }
+        }
+        store.records.unshift({ runId: match ? match.id : null, mpm: V, at: at || null });
+        if (store.records.length > MAX_RECORDS) { store.records.length = MAX_RECORDS; }
     }
 
     function startRun(state, nowWallMs) {
@@ -162,7 +207,7 @@ export function installSessionHistory(runtime) {
         pendingCtx = null;
         nextRunId += 1;
         store.runs.push(run);
-        while (store.runs.length > config.maxRuns) { store.runs.shift(); }
+        trimRuns(); // keeps the newest maxRuns NON-record runs; record runs are never dropped
         currentRun = run;
         return run;
     }
@@ -433,7 +478,9 @@ export function installSessionHistory(runtime) {
         if (!Number.isFinite(best) || best <= 0) { return; }
 
         var acct = store.account || (store.account = {});
-        var changed = Number(acct.bestMedalPerMin) !== best;
+        var prevBest = Number(acct.bestMedalPerMin);
+        var hadBest = Number.isFinite(prevBest) && prevBest > 0;
+        var changed = !hadBest || best !== prevBest;
         acct.bestMedalPerMin = best;
         if (src.bestMedalPerMinAt != null) { acct.bestMedalPerMinAt = src.bestMedalPerMinAt; }
         if (src.soulRestStartAt != null) { acct.soulRestStartAt = src.soulRestStartAt; }
@@ -441,6 +488,15 @@ export function installSessionHistory(runtime) {
         acct.at = Date.now();
         window.__EF_SESSION_HISTORY_ACCOUNT__ = acct;   // quick verification handle
         if (changed) {
+            if (!hadBest) {
+                // First sight of your record — it was set before we started tracking, so seed it
+                // unattributed (no run to point at). Genuine NEW highs below get attributed.
+                if (store.records.length === 0) {
+                    store.records.unshift({ runId: null, mpm: best, at: acct.bestMedalPerMinAt || null });
+                }
+            } else if (best > prevBest) {
+                tagRecordRun(best, acct.bestMedalPerMinAt); // a record we OBSERVED -> attribute to its run
+            }
             try {
                 (runtime && runtime.logger ? runtime.logger : console).info(
                     "session-history",
