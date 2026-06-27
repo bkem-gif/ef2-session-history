@@ -173,16 +173,18 @@ export function installSessionHistory(runtime) {
         for (var i = 0; i < store.runs.length; i++) { if (!prot[store.runs[i].id]) { nonRecord++; } }
         while (nonRecord > config.maxRuns && dropOldestNonRecord()) { nonRecord--; }
     }
-    // A new all-time record V was set at `at`. Attribute it to the run whose recorded peak best
-    // matches V (the one that set it), prepend it, keep the newest MAX_RECORDS.
+    // A new all-time record V was set at `at`. Attribute it to the run whose recorded peak closely
+    // matches V (the run that set it), prepend it, keep the newest MAX_RECORDS. The record can be
+    // set OFF this device (mobile / native client we never recorded) — then no run matches and we
+    // store it UNATTRIBUTED (runId: null) so the viewer shows the record line/badge without a run.
     function tagRecordRun(V, at) {
         if (store.records.length && Math.abs(Number(store.records[0].mpm) - V) < 1) { return; } // dedupe repeated syncs
         var match = null, bestDelta = Infinity;
-        for (var i = store.runs.length - 1; i >= 0; i--) {
+        for (var i = store.runs.length - 1; i >= 0; i--) {            // most-recent first (wins ties)
             var peak = Number(store.runs[i].bestMpm);
             if (!Number.isFinite(peak) || peak <= 0) { continue; }
             var d = Math.abs(peak - V);
-            if (d < bestDelta && d <= V * 0.25) { bestDelta = d; match = store.runs[i]; }
+            if (d < bestDelta && d <= V * 0.12) { bestDelta = d; match = store.runs[i]; } // tight: avoid false matches
         }
         store.records.unshift({ runId: match ? match.id : null, mpm: V, at: at || null });
         if (store.records.length > MAX_RECORDS) { store.records.length = MAX_RECORDS; }

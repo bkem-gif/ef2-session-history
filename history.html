@@ -146,6 +146,7 @@
     <canvas id="chart"></canvas>
     <div class="tooltip" id="tooltip"></div>
     <div class="legend" id="legend"></div>
+    <div id="recordsBar" style="display:none;font-size:11px;margin-top:7px;opacity:.92"></div>
     <div style="display:flex;align-items:center;justify-content:flex-end;gap:10px;margin-top:4px">
       <span style="font-size:10px;opacity:.4">drag across the chart or scroll to zoom &middot; double-click to reset</span>
       <button id="zoomReset" type="button" style="display:none;font-size:12px;padding:2px 9px">Reset zoom</button>
@@ -215,10 +216,12 @@ requestAnimationFrame(glowLoop);
 // --- display settings: per-feature on/off toggles (persisted per device) -----------
 const SETTINGS_KEY = "__EF_SESSION_HISTORY_SETTINGS__";
 const FEATURES = [
-  { key: "recordLine", label: "Record line",         desc: "dashed bar at your all-time best medals/min" },
-  { key: "glow",       label: "Beating-record glow", desc: "pulsing green highlight where you beat your record" },
-  { key: "ghost",      label: "Record-run ghost",    desc: "faint trace of your record run, to race its pace" },
-  { key: "badge",      label: "Record badge",        desc: "the “beat record / % of record” tag in the legend" },
+  { key: "recordLine",  label: "Record line",         desc: "dashed bar at your all-time best medals/min" },
+  { key: "glow",        label: "Beating-record glow", desc: "pulsing green highlight where you beat your record" },
+  { key: "ghost",       label: "Record-run ghost",    desc: "faint trace of your record run, to race its pace" },
+  { key: "badge",       label: "Record badge",        desc: "the “beat record / % of record” tag in the legend" },
+  { key: "recordsList", label: "Records strip",       desc: "your last record runs listed under the chart" },
+  { key: "liveRefresh", label: "Live auto-refresh",   desc: "auto-update the chart as you play; turn off to freeze the view for analysis" },
 ];
 function loadSettings() {
   try { const s = JSON.parse(localStorage.getItem(SETTINGS_KEY) || "null"); return (s && typeof s === "object") ? s : {}; }
@@ -226,7 +229,8 @@ function loadSettings() {
 }
 let settings = loadSettings();
 function saveSettings() { try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (e) {} }
-function feat(key) { return settings[key] !== false; }   // default ON unless explicitly disabled
+function featDefault(key) { const f = FEATURES.find(x => x.key === key); return !(f && f.def === false); } // ON unless def:false
+function feat(key) { return settings[key] !== undefined ? settings[key] !== false : featDefault(key); }
 
 function renderSettingsPanel() {
   const panel = document.getElementById("settingsPanel");
@@ -244,6 +248,8 @@ function renderSettingsPanel() {
   panel.querySelectorAll("input[data-feat]").forEach(cb => cb.addEventListener("change", () => {
     settings[cb.getAttribute("data-feat")] = cb.checked;
     saveSettings();
+    applyLiveRefresh();
+    renderRecordsBar();
     drawChart();
   }));
 }
@@ -252,6 +258,66 @@ function toggleSettings() {
   if (!panel) return;
   if (panel.style.display === "none") { renderSettingsPanel(); panel.style.display = ""; }
   else { panel.style.display = "none"; }
+}
+
+// rank of a run among your record-setting runs (1 = current record, 2.. = previous), else 0
+function recordRankOf(runId) {
+  if (!Array.isArray(store.records) || runId == null) return 0;
+  const i = store.records.findIndex(e => e && e.runId === runId);
+  return i < 0 ? 0 : i + 1;
+}
+function fmtShortDate(at) {
+  try { const d = new Date(at); return isNaN(d) ? "" : d.toLocaleDateString(undefined, { month: "short", day: "numeric" }); }
+  catch (e) { return ""; }
+}
+
+// the strip of your last record runs under the chart. Records set on ANOTHER device (mobile /
+// native client we never recorded) have no run and are shown, labelled, but not clickable.
+function renderRecordsBar() {
+  const el = document.getElementById("recordsBar");
+  if (!el) return;
+  const recs = (Array.isArray(store.records) ? store.records : []).filter(e => e && Number(e.mpm) > 0);
+  if (!recs.length || !feat("recordsList")) { el.innerHTML = ""; el.style.display = "none"; return; }
+  el.style.display = "";
+  const items = recs.map((e, i) => {
+    const mpm = fmtMedals(Number(e.mpm));
+    const when = e.at ? fmtShortDate(e.at) : "";
+    const tag = i === 0 ? "current record" : "previous #" + (i + 1);
+    const attributed = e.runId != null && store.runs.some(r => r.id === e.runId);
+    const off = (e.runId == null) ? ' <span style="opacity:.45">(off-device)</span>' : "";
+    const title = tag + (when ? " · " + when : "") + (attributed ? " · click to view this run" : (e.runId == null ? " · set on another device — no run data" : " · run no longer kept"));
+    const style = attributed ? "cursor:pointer;border-bottom:1px dotted rgba(255,224,138,.5)" : "opacity:.8";
+    const attr = attributed ? ' data-rec-run="' + e.runId + '"' : "";
+    return '<span' + attr + ' title="' + esc(title) + '" style="' + style + '">' + (i === 0 ? "🏆 " : "")
+      + mpm + (when ? ' <span style="opacity:.5">' + when + '</span>' : "") + off + '</span>';
+  });
+  el.innerHTML = '<span style="opacity:.55">Records:</span> ' + items.join(' <span style="opacity:.3">·</span> ');
+  el.querySelectorAll("[data-rec-run]").forEach(s => s.addEventListener("click", () => {
+    const sel = document.getElementById("runSelect");
+    sel.value = s.getAttribute("data-rec-run"); sel.dispatchEvent(new Event("change"));
+  }));
+}
+
+// --- live auto-refresh: poll the recorder's store while you play --------------------
+let liveTimer = null, _lastLive = 0;
+function applyLiveRefresh() {
+  if (feat("liveRefresh")) { if (!liveTimer) liveTimer = setInterval(liveTick, 2000); }
+  else if (liveTimer) { clearInterval(liveTimer); liveTimer = null; }
+}
+function liveTick() {
+  if (document.hidden || !feat("liveRefresh")) return;
+  const now = Date.now();
+  if (now - _lastLive < 700) return;            // de-dupe the storage-event + interval paths
+  _lastLive = now;
+  const prevLast = store.runs.length ? store.runs[store.runs.length - 1].id : null;
+  const wasOnLatest = String(selectedRunId) === String(prevLast);
+  load();
+  if (!hasData()) return;
+  if (wasOnLatest && store.runs.length) selectedRunId = store.runs[store.runs.length - 1].id; // follow new runs
+  renderRunSelect();
+  drawChart();
+  renderSummary();
+  renderRecordsBar();
 }
 
 function load() {
@@ -343,7 +409,9 @@ function fmtRunLabel(run) {
   const stamp = isNaN(d.getTime()) ? "run " + run.id : d.toLocaleString();
   const mpmV = Number(run.bestMpm) * medalMult(run);
   const mpm = (Number.isFinite(mpmV) && mpmV > 0) ? `  ·  ${fmtMedals(mpmV)} mpm` : "";
-  const base = `#${run.id}  ${stamp}  (W${run.peakWave ?? "-"})${mpm}`;
+  const rank = recordRankOf(run.id);
+  const trophy = rank ? `🏆#${rank} ` : "";   // record run (1 = current record)
+  const base = `${trophy}#${run.id}  ${stamp}  (W${run.peakWave ?? "-"})${mpm}`;
   return run.name ? `${run.name} — ${base}` : base;
 }
 
@@ -1098,7 +1166,7 @@ function renderSummary() {
     const ctx = run.ctx || {};
     const cell = (v, fmt) => Number.isFinite(Number(v)) ? fmt(Number(v)) : "-";
     return `<tr>
-      <td>#${run.id}${run.name ? ` · <span style="opacity:.85">${esc(run.name)}</span>` : ""}${run.notes ? ` <span title="${esc(run.notes)}" style="opacity:.55">📝</span>` : ""}</td>
+      <td>${recordRankOf(run.id) ? `<span title="Record #${recordRankOf(run.id)}" style="color:#ffe08a">🏆${recordRankOf(run.id)}</span> ` : ""}#${run.id}${run.name ? ` · <span style="opacity:.85">${esc(run.name)}</span>` : ""}${run.notes ? ` <span title="${esc(run.notes)}" style="opacity:.55">📝</span>` : ""}</td>
       <td>${isNaN(d.getTime()) ? "-" : d.toLocaleString()}</td>
       <td>${dur}</td>
       <td>${run.peakWave ?? "-"}</td>
@@ -1296,6 +1364,7 @@ function render() {
   syncRunMeta(run);
   renderSummary();
   drawChart();
+  renderRecordsBar();
   renderContext();
   updateZoomUI();
 }
@@ -1362,10 +1431,11 @@ hoverCanvas.addEventListener("wheel", onChartWheel, { passive: false }); // scro
 hoverCanvas.addEventListener("dblclick", resetZoom);             // double-click to zoom back out
 document.getElementById("zoomReset").addEventListener("click", resetZoom);
 // live-update if the game tab writes new data
-window.addEventListener("storage", e => { if (e.key === STORAGE_KEY) { load(); render(); } });
+window.addEventListener("storage", e => { if (e.key === STORAGE_KEY) liveTick(); });
 
 load();
 render();
+applyLiveRefresh();
 loadUnitNames();
 </script>
 </body>
