@@ -411,12 +411,53 @@ export function installSessionHistory(runtime) {
             persist(nowM);
         }
     }
+    // --- account-level Soul Rest record (the value idle income is paid on) -----------
+    // `bestMedalPerMin` = your all-time best medals/min "from Rebirth"; Soul Rest pays
+    //   medals = floor(restMinutes, capped 240) x bestMedalPerMin x 0.8   (game GAME_872).
+    // It rides body.user alongside the run-context scalars and PERSISTS across rebirths,
+    // so it lives at the STORE level, not per-run. Read-only, like every other capture.
+    function captureAccount(body) {
+        if (!body || typeof body !== "object") { return; }
+        // Locate the object carrying bestMedalPerMin (normally body.user; tolerate other shapes).
+        var src = (body.user && Number(body.user.bestMedalPerMin) > 0) ? body.user
+            : (Number(body.bestMedalPerMin) > 0) ? body
+            : null;
+        if (!src) {
+            for (var k in body) {
+                var o = body[k];
+                if (o && typeof o === "object" && Number(o.bestMedalPerMin) > 0) { src = o; break; }
+            }
+        }
+        if (!src) { return; }
+        var best = Number(src.bestMedalPerMin);
+        if (!Number.isFinite(best) || best <= 0) { return; }
+
+        var acct = store.account || (store.account = {});
+        var changed = Number(acct.bestMedalPerMin) !== best;
+        acct.bestMedalPerMin = best;
+        if (src.bestMedalPerMinAt != null) { acct.bestMedalPerMinAt = src.bestMedalPerMinAt; }
+        if (src.soulRestStartAt != null) { acct.soulRestStartAt = src.soulRestStartAt; }
+        if (src.soulRestEndAt != null) { acct.soulRestEndAt = src.soulRestEndAt; }
+        acct.at = Date.now();
+        window.__EF_SESSION_HISTORY_ACCOUNT__ = acct;   // quick verification handle
+        if (changed) {
+            try {
+                (runtime && runtime.logger ? runtime.logger : console).info(
+                    "session-history",
+                    "Soul Rest record captured: bestMedalPerMin=" + best
+                        + (acct.bestMedalPerMinAt ? " (set " + acct.bestMedalPerMinAt + ")" : "")
+                );
+            } catch (e) {}
+            persist(nowMono(), true);
+        }
+    }
+
     // Run-context capture via the runtime's sanctioned JSON.parse hook (the runtime owns the
     // single JSON.parse wrap — plugins must not patch it directly).
     var unobserveParse = (runtime && runtime.hooks && typeof runtime.hooks.onJsonParse === "function")
         ? runtime.hooks.onJsonParse(function (parsed) {
             try {
-                if (parsed && parsed.body) { captureCtx(parsed.body); }
+                if (parsed && parsed.body) { captureCtx(parsed.body); captureAccount(parsed.body); }
             } catch (error) {
                 // Context capture must never break the game's parsing.
             }
