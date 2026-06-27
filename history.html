@@ -197,6 +197,18 @@ let selectedRunId = null;   // resolved to the latest run with data
 let chartGeom = null;       // pixel geometry of the last draw, for hover
 let xView = null;           // zoom window in data-x (minutes): {min,max}; null = full extent
 let dragZoom = null;        // in-progress drag-to-select-x state
+let GLOW_PHASE = 0;         // animates the record-beating glow pulse
+let chartHasGlow = false;   // set true by drawChart while a stretch is above your record
+function glowLoop(now) {
+  // re-render at ~16fps only while a record-beating stretch is on screen and the tab is visible;
+  // otherwise this is a cheap no-op (and rAF is paused entirely on hidden tabs).
+  if (chartHasGlow && !document.hidden && now - glowLoop._last >= 60) {
+    glowLoop._last = now; GLOW_PHASE += 0.45; drawChart();
+  }
+  requestAnimationFrame(glowLoop);
+}
+glowLoop._last = 0;
+requestAnimationFrame(glowLoop);
 
 function load() {
   try {
@@ -571,7 +583,17 @@ function drawChart() {
     if (p.x < vMin || p.x > vMax) continue;
     if (p.y > axisMax[s.axis]) axisMax[s.axis] = p.y;
   }
-  axisMax.left = niceCeil(Math.max(axisMax.left, 1));
+  // --- your all-time Soul Rest record (medals/min) — the bar to beat ----------------
+  // recordMpm is the raw server best (what Soul Rest pays on); ghostRun is the run that set
+  // the current record, drawn faint so you race its pace. Single-run view only.
+  chartHasGlow = false;
+  const recordMpm = (!multi && store.account && Number(store.account.bestMedalPerMin) > 0)
+    ? Number(store.account.bestMedalPerMin) : NaN;
+  const recordEntry = (Array.isArray(store.records) && store.records.length) ? store.records[0] : null;
+  const ghostRun = (recordEntry && recordEntry.runId != null && (!run || run.id !== recordEntry.runId))
+    ? store.runs.find(r => r.id === recordEntry.runId) : null;
+  // keep the record line on-screen even when this run's peak is below it
+  axisMax.left = niceCeil(Math.max(axisMax.left, 1, Number.isFinite(recordMpm) ? recordMpm : 0));
   axisMax.right = niceCeil(Math.max(axisMax.right, 1));
 
   const haveLeft = series.some(s => s.axis === "left");
@@ -642,6 +664,23 @@ function drawChart() {
   // clipped to the plot so a zoomed-out-of-view segment can't spill past the axes.
   ctx.save();
   ctx.beginPath(); ctx.rect(padL, padT, plotW, plotH); ctx.clip();
+
+  // ghost line — your current record run's medals/min, faint + dashed, so you race its pace
+  if (ghostRun && Array.isArray(ghostRun.samples)) {
+    const gmult = medalMult(ghostRun);
+    ctx.save();
+    ctx.strokeStyle = "rgba(255,214,130,0.55)"; ctx.lineWidth = 2; ctx.setLineDash([5, 4]);
+    ctx.beginPath();
+    let started = false;
+    for (const gs of ghostRun.samples) {
+      const gy = metricVal(gs.mpm) * gmult;
+      if (!Number.isFinite(gy)) { started = false; continue; }
+      const px = xPix((Number(gs.t) || 0) / 60), py = yPix(gy, "left");
+      if (!started) { ctx.moveTo(px, py); started = true; } else { ctx.lineTo(px, py); }
+    }
+    ctx.stroke(); ctx.restore();
+  }
+
   ctx.lineWidth = 2;
   for (const s of series) {
     ctx.strokeStyle = s.color;
@@ -656,6 +695,48 @@ function drawChart() {
       for (const p of s.points) {
         if (p.rec === "rebirth") { ctx.beginPath(); ctx.arc(xPix(p.x), yPix(p.y, s.axis), 2.5, 0, Math.PI * 2); ctx.fill(); }
       }
+    }
+  }
+
+  // GLOW — where medals/min rises ABOVE your record you're setting a new record; make it
+  // unmissable. Clip to the band above the record line and re-stroke the line with a pulsing
+  // green glow. The pulse comes from glowLoop re-running drawChart with a shifting GLOW_PHASE.
+  if (Number.isFinite(recordMpm) && recordMpm < axisMax.left) {
+    const mpmS = series.find(s => s.key === "mpm");
+    const recY = yPix(recordMpm, "left");
+    const above = mpmS && mpmS.points.some(p => Number.isFinite(p.y) && p.y > recordMpm
+      && p.x >= vMin && p.x <= vMax);
+    if (mpmS && above && recY > padT) {
+      chartHasGlow = true;
+      const pulse = 0.65 + 0.35 * Math.sin(GLOW_PHASE);          // 0.3 .. 1.0
+      const fp = mpmS.points.filter(p => Number.isFinite(p.y));
+      ctx.save();
+      ctx.beginPath(); ctx.rect(padL, padT, plotW, recY - padT); ctx.clip();   // band above the record
+      // translucent green wash filling the "you're beating it" area
+      if (fp.length) {
+        ctx.beginPath();
+        ctx.moveTo(xPix(fp[0].x), yPix(fp[0].y, "left"));
+        for (let i = 1; i < fp.length; i++) ctx.lineTo(xPix(fp[i].x), yPix(fp[i].y, "left"));
+        ctx.lineTo(xPix(fp[fp.length - 1].x), padT + plotH);
+        ctx.lineTo(xPix(fp[0].x), padT + plotH);
+        ctx.closePath();
+        ctx.fillStyle = "rgba(120,255,160," + (0.24 * pulse).toFixed(3) + ")";
+        ctx.fill();
+      }
+      // thick neon-green glowing line over it
+      ctx.lineWidth = 4.5; ctx.lineCap = "round"; ctx.lineJoin = "round";
+      ctx.strokeStyle = "rgba(175,255,200," + Math.min(1, 1.05 * pulse).toFixed(3) + ")";
+      ctx.shadowColor = "rgba(110,255,150," + Math.min(1, pulse).toFixed(3) + ")";
+      ctx.shadowBlur = 14 + 24 * pulse;
+      ctx.beginPath();
+      let started = false;
+      for (const p of mpmS.points) {
+        if (!Number.isFinite(p.y)) { started = false; continue; }
+        const px = xPix(p.x), py = yPix(p.y, "left");
+        if (!started) { ctx.moveTo(px, py); started = true; } else { ctx.lineTo(px, py); }
+      }
+      ctx.stroke();
+      ctx.restore();
     }
   }
   ctx.restore();
@@ -678,12 +759,45 @@ function drawChart() {
     ctx.fillText(s.fmt(peak.y), Math.max(padL + 18, Math.min(cssW - padR - 18, px)), ly);
   }
 
+  // RECORD LINE — your all-time best medals/min: the bar to beat. Bright, dashed, on top.
+  if (Number.isFinite(recordMpm) && recordMpm <= axisMax.left) {
+    const ry = yPix(recordMpm, "left");
+    let when = "";
+    try { if (recordEntry && recordEntry.at) { const d = new Date(recordEntry.at); if (!isNaN(d)) when = " · " + d.toLocaleDateString(); } } catch (e) {}
+    ctx.save();
+    ctx.strokeStyle = "rgba(255,242,170,1)"; ctx.lineWidth = 2.5; ctx.setLineDash([8, 5]);
+    ctx.shadowColor = "rgba(255,228,120,0.65)"; ctx.shadowBlur = 6;
+    ctx.beginPath(); ctx.moveTo(padL, ry); ctx.lineTo(cssW - padR, ry); ctx.stroke();
+    ctx.shadowBlur = 0; ctx.setLineDash([]);
+    ctx.font = "bold 11px monospace"; ctx.textAlign = "right";
+    ctx.fillStyle = "rgba(255,238,150,0.95)";
+    const lbl = "\u{1F3C6} record " + fmtMedals(recordMpm) + when;
+    if (ry - 3 > padT + 10) { ctx.textBaseline = "bottom"; ctx.fillText(lbl, cssW - padR - 5, ry - 3); }
+    else { ctx.textBaseline = "top"; ctx.fillText(lbl, cssW - padR - 5, ry + 3); }
+    ctx.restore();
+  }
+
   // legend
   if (!multi) {
+    // record badge: is THIS run a record? did its peak beat the record? how close?
+    let recordBadge = "";
+    const mpmPk = (series.find(s => s.key === "mpm") || {}).peak;
+    if (Number.isFinite(recordMpm) && mpmPk && Number.isFinite(mpmPk.y)) {
+      const rank = (Array.isArray(store.records) && run)
+        ? store.records.findIndex(e => e && e.runId === run.id) + 1 : 0;
+      if (rank >= 1) {
+        recordBadge = `<span class="item" style="color:#ffe08a;font-weight:700">&#x1F3C6; Record #${rank}${rank === 1 ? " (current)" : ""}</span>`;
+      } else if (mpmPk.y >= recordMpm) {
+        recordBadge = `<span class="item" style="color:#96ffb4;font-weight:700">&#x1F3C6; beat record +${((mpmPk.y / recordMpm - 1) * 100).toFixed(1)}%</span>`;
+      } else {
+        recordBadge = `<span class="item" style="color:#ffd27a">peak = ${(mpmPk.y / recordMpm * 100).toFixed(0)}% of record</span>`;
+      }
+    }
     legend.innerHTML = series.map(s => {
       const peakStr = s.peak ? ` &middot; peak <b>${s.fmt(s.peak.y)}</b> @ ${fmtClock(s.peak.t)}` : "";
       return `<span class="item"><span class="swatch" style="background:${s.color}"></span>${s.label} (${s.axis === "left" ? "left" : "right"})${peakStr}</span>`;
     }).join("")
+      + recordBadge
       + `<span class="item" style="opacity:.7"><span class="swatch" style="background:#ff6b6b"></span>rebirth advised</span>`
       + (buff.ok && buff.spans.length
           ? `<span class="item" style="opacity:.7"><span class="swatch" style="background:rgba(255,107,107,0.32)"></span>priest buff down</span>`
