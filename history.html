@@ -216,12 +216,15 @@ requestAnimationFrame(glowLoop);
 // --- display settings: per-feature on/off toggles (persisted per device) -----------
 const SETTINGS_KEY = "__EF_SESSION_HISTORY_SETTINGS__";
 const FEATURES = [
-  { key: "recordLine",  label: "Record line",         desc: "dashed bar at your all-time best medals/min" },
-  { key: "glow",        label: "Beating-record glow", desc: "pulsing green highlight where you beat your record" },
-  { key: "ghost",       label: "Record-run ghost",    desc: "faint trace of your record run, to race its pace" },
-  { key: "badge",       label: "Record badge",        desc: "the “beat record / % of record” tag in the legend" },
-  { key: "recordsList", label: "Records strip",       desc: "your last record runs listed under the chart" },
-  { key: "liveRefresh", label: "Live auto-refresh",   desc: "auto-update the chart as you play; turn off to freeze the view for analysis" },
+  { group: "Chart", key: "recordLine",  label: "Record line",         desc: "dashed bar at your all-time best medals/min" },
+  { group: "Chart", key: "glow",        label: "Beating-record glow", desc: "pulsing green highlight where you beat your record" },
+  { group: "Chart", key: "ghost",       label: "Record-run ghost",    desc: "faint trace of your record run, to race its pace" },
+  { group: "Chart", key: "badge",       label: "Record badge",        desc: "the “beat record / % of record” tag in the legend" },
+  { group: "Chart", key: "recordsList", label: "Records strip",       desc: "your last record runs listed under the chart" },
+  { group: "Chart", key: "liveRefresh", label: "Live auto-refresh",   desc: "auto-update the chart as you play; turn off to freeze the view for analysis" },
+  { group: "In-game overlay", key: "overlay",      label: "Show the overlay",  desc: "the bright MPM-record HUD on the game screen" },
+  { group: "In-game overlay", key: "overlayRelic", label: "Relic reminder",    desc: "the “swap to your medal relics” line" },
+  { group: "In-game overlay", key: "overlayGlow",  label: "Bank-it glow",      desc: "pulse the overlay green when you’re above your record" },
 ];
 function loadSettings() {
   try { const s = JSON.parse(localStorage.getItem(SETTINGS_KEY) || "null"); return (s && typeof s === "object") ? s : {}; }
@@ -235,15 +238,23 @@ function feat(key) { return settings[key] !== undefined ? settings[key] !== fals
 function renderSettingsPanel() {
   const panel = document.getElementById("settingsPanel");
   if (!panel) return;
+  const groups = [];
+  FEATURES.forEach(f => {
+    let g = groups.find(x => x.name === (f.group || ""));
+    if (!g) { g = { name: f.group || "", items: [] }; groups.push(g); }
+    g.items.push(f);
+  });
   panel.innerHTML =
-    '<div style="font-weight:700;margin-bottom:4px">Chart features</div>' +
-    '<div style="font-size:11px;opacity:.55;margin-bottom:10px">Turn off anything you don’t want on the chart. Saved on this device.</div>' +
-    FEATURES.map(f =>
-      '<label style="display:flex;align-items:flex-start;gap:8px;padding:5px 0;cursor:pointer">' +
-        '<input type="checkbox" data-feat="' + f.key + '"' + (feat(f.key) ? " checked" : "") + ' style="margin-top:2px">' +
-        '<span><span style="font-weight:600">' + f.label + '</span>' +
-        '<span style="display:block;font-size:11px;opacity:.55">' + f.desc + '</span></span>' +
-      '</label>'
+    '<div style="font-size:11px;opacity:.55;margin-bottom:6px">Turn off anything you don’t want. Saved on this device.</div>' +
+    groups.map(g =>
+      (g.name ? '<div style="font-weight:700;margin:9px 0 1px">' + g.name + '</div>' : '') +
+      g.items.map(f =>
+        '<label style="display:flex;align-items:flex-start;gap:8px;padding:5px 0;cursor:pointer">' +
+          '<input type="checkbox" data-feat="' + f.key + '"' + (feat(f.key) ? " checked" : "") + ' style="margin-top:2px">' +
+          '<span><span style="font-weight:600">' + f.label + '</span>' +
+          '<span style="display:block;font-size:11px;opacity:.55">' + f.desc + '</span></span>' +
+        '</label>'
+      ).join("")
     ).join("");
   panel.querySelectorAll("input[data-feat]").forEach(cb => cb.addEventListener("change", () => {
     settings[cb.getAttribute("data-feat")] = cb.checked;

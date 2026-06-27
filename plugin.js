@@ -21,6 +21,7 @@
  * it reads the recorder's localStorage). Read-only throughout: never sends a move.
  */
 import { installSessionHistory } from "./recorder.js";
+import { installSessionOverlay } from "./overlay.js";
 
 export default {
     id: "session-history",
@@ -28,16 +29,16 @@ export default {
 
     setup(runtime) {
         const handle = installSessionHistory(runtime);
+        const overlay = installSessionOverlay(runtime);   // in-game MPM record HUD (data-ef-plugin-overlay)
         runtime.logger.info(
             "session-history",
-            "recorder installed — viewer at /__ef_plugins__/session-history/history.html"
+            "recorder + MPM record overlay installed — viewer at /__ef_plugins__/session-history/history.html"
         );
 
         return {
             detach() {
-                if (handle && typeof handle.detach === "function") {
-                    handle.detach();
-                }
+                if (handle && typeof handle.detach === "function") { handle.detach(); }
+                if (overlay && typeof overlay.detach === "function") { overlay.detach(); }
             }
         };
     }
