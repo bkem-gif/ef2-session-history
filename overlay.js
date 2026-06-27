@@ -3,8 +3,8 @@
  *
  * A small, draggable, transparent HUD that shows your all-time Soul Rest record
  * (bestMedalPerMin — the value idle income is paid on), your LIVE medals/min versus it,
- * a caution to swap to your medal relics, and a green glow the moment your live rate
- * beats the record (a pure comparison — no projection).
+ * a caution to swap to your medal relics, and an "ABOVE RECORD +X%" status with a green glow
+ * the moment your live rate beats the record (a pure comparison — no projection).
  *
  * Data is read-only: live medals/min from the Wave Tracker's `wave:sample` event, and the
  * record from the recorder's captured account (window.__EF_SESSION_HISTORY_ACCOUNT__, with the
@@ -63,6 +63,7 @@ export function installSessionOverlay(runtime) {
             "#" + ID + " .bar{height:5px;border-radius:3px;background:rgba(255,255,255,.10);margin-top:5px;overflow:hidden}" +
             "#" + ID + " .fill{height:100%;border-radius:3px;background:linear-gradient(90deg,#ffd27a,#ffe08a);transition:width .25s}" +
             "#" + ID + ".above .rec{color:#aaffc4}#" + ID + ".above .fill{background:linear-gradient(90deg,#6bffa0,#aaffc4)}" +
+            "#" + ID + " .abv{margin-top:7px;font-weight:800;font-size:12px;color:#aaffc4;text-align:center;text-shadow:0 0 8px rgba(120,255,160,.6)}" +
             "#" + ID + ".min .body{display:none}";
         document.head.appendChild(s);
     }
@@ -120,6 +121,7 @@ export function installSessionOverlay(runtime) {
         html += '<div class="now"><span style="opacity:.7">now</span><b>' + (haveLive ? fmtMedals(liveMpm) : "—") + '</b>'
             + '<span class="pct">' + (pct != null ? pct + "%" : "") + '</span></div>'
             + '<div class="bar"><div class="fill" style="width:' + fill + '%"></div></div>';
+        if (above) html += '<div class="abv">▲ ABOVE RECORD +' + ((liveMpm / record - 1) * 100).toFixed(1) + '%</div>';
         if (feat("overlayRelic")) html += '<div class="relic">⚠️ swap to your medal relics</div>';
         body.innerHTML = html;
     }
