@@ -50,6 +50,7 @@ export function installSessionOverlay(runtime) {
     }
 
     let liveMpmRaw = NaN, record = readRecord();
+    let reviveEpochMs = NaN, lastSampleWallMs = 0, cdTimer = null;   // wall-clock anchor for the :59 revive countdown
 
     function el(tag, css, html) { const e = document.createElement(tag); if (css) e.style.cssText = css; if (html != null) e.innerHTML = html; return e; }
     let panel = null, body = null, minimized = false;
@@ -73,6 +74,11 @@ export function installSessionOverlay(runtime) {
             "#" + ID + " .fill{height:100%;border-radius:3px;background:linear-gradient(90deg,#ffd27a,#ffe08a);transition:width .25s}" +
             "#" + ID + ".above .rec{color:#aaffc4}#" + ID + ".above .fill{background:linear-gradient(90deg,#6bffa0,#aaffc4)}" +
             "#" + ID + " .abv{margin-top:7px;font-weight:800;font-size:12px;color:#aaffc4;text-align:center;text-shadow:0 0 8px rgba(120,255,160,.6)}" +
+            "#" + ID + " .cd{margin-top:6px;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;gap:5px}" +
+            "#" + ID + " .cd-early{color:#ff6b6b}#" + ID + " .cd-near{color:#ffcf66}" +
+            "#" + ID + " .cd-go{color:#7dffab;animation:efcd .7s ease-in-out infinite}" +
+            "@keyframes efcd{0%,100%{opacity:1}50%{opacity:.4}}" +
+            "#" + ID + " .cdq{flex:none;font-size:8px;font-weight:700;color:#cfc7b3;opacity:.55;border:1px solid currentColor;border-radius:50%;width:12px;height:12px;line-height:11px;text-align:center;cursor:help}" +
             "#" + ID + ".min .body{display:none}";
         document.head.appendChild(s);
     }
@@ -132,17 +138,50 @@ export function installSessionOverlay(runtime) {
             + '<span class="pct">' + (pct != null ? pct + "%" : "") + '</span></div>'
             + '<div class="bar"><div class="fill" style="width:' + fill + '%"></div></div>';
         if (above) html += '<div class="abv">▲ ABOVE RECORD +' + ((liveMpm / record - 1) * 100).toFixed(1) + '%</div>';
+        if (above && feat("overlayCountdown")) html += '<div class="cd" id="ef-cd-line"></div>';
         if (feat("overlayRelic")) html += '<div class="relic">⚠️ swap to your medal relics</div>';
         body.innerHTML = html;
+        tickCountdown();   // fill the countdown now; the interval keeps it ticking between samples
+    }
+
+    // --- :59 revive countdown ---------------------------------------------------------
+    // The record = medals / floor(minutes elapsed), so within a minute it climbs and peaks just
+    // before the whole-minute boundary. Count down (real wall-clock, extrapolated from the last
+    // rebirthTimeSec) to that boundary so you can revive at the tip. Shown only when above record.
+    function countdownState() {
+        if (!feat("overlayCountdown") || !Number.isFinite(reviveEpochMs)) return null;
+        if (Date.now() - lastSampleWallMs > 12000) return null;   // no recent sample -> run inactive
+        const liveSec = (Date.now() - reviveEpochMs) / 1000;
+        if (!Number.isFinite(liveSec) || liveSec < 0) return null;
+        const s = 60 - (liveSec % 60);          // seconds until the floor steps (and MPM drops)
+        return { s: s, zone: s <= 4 ? "go" : s <= 10 ? "near" : "early" };
+    }
+    function tickCountdown() {
+        const line = document.getElementById("ef-cd-line");
+        if (!line) return;
+        const st = countdownState();
+        if (!st) { line.style.display = "none"; return; }
+        line.style.display = "";
+        const n = Math.max(0, Math.ceil(st.s));
+        const q = '<span class="cdq" title="Your MPM record = medals ÷ whole minutes elapsed, so it peaks in the last seconds before each game-minute ticks over. Revive on green to lock in a little more.">?</span>';
+        if (st.zone === "go") { line.className = "cd cd-go"; line.innerHTML = '🟢 REVIVE NOW ' + q; }
+        else if (st.zone === "near") { line.className = "cd cd-near"; line.innerHTML = '⚠️ revive in ' + n + 's ' + q; }
+        else { line.className = "cd cd-early"; line.innerHTML = '🚨 revive in ' + n + 's ' + q; }
     }
 
     // live medals/min from the Wave Tracker (v0.5.3+ nested sample, or a flat shape)
     function mpmOf(s) { if (!s) return NaN; const m = s.medalMpmState ? Number(s.medalMpmState.currentMpm) : Number(s.currentMpm); return Number.isFinite(m) ? m : NaN; }
     const unsub = (runtime && runtime.events && typeof runtime.events.on === "function")
-        ? runtime.events.on("wave:sample", (s) => { try { const m = mpmOf(s); if (Number.isFinite(m)) { liveMpmRaw = m; record = readRecord(); render(); } } catch (e) {} })
+        ? runtime.events.on("wave:sample", (s) => { try {
+            const rt = s ? Number(s.rebirthTimeSec) : NaN;
+            if (Number.isFinite(rt) && rt >= 0) { reviveEpochMs = Date.now() - rt * 1000; lastSampleWallMs = Date.now(); }   // wall-clock anchor
+            const m = mpmOf(s); if (Number.isFinite(m)) { liveMpmRaw = m; record = readRecord(); }
+            render();
+        } catch (e) {} })
         : function () {};
 
     const recTimer = setInterval(() => { const r = readRecord(); if (r !== record) { record = r; render(); } }, 4000);
+    cdTimer = setInterval(tickCountdown, 250);   // smooth per-second countdown between samples
     function onStorage(e) {
         if (e.key === SETTINGS_KEY) { settings = readSettings(); render(); }
         else if (e.key === STORE_KEY) { record = readRecord(); render(); }
@@ -158,6 +197,7 @@ export function installSessionOverlay(runtime) {
         detach() {
             try { unsub && unsub(); } catch (e) {}
             clearInterval(recTimer);
+            if (cdTimer) clearInterval(cdTimer);
             window.removeEventListener("storage", onStorage);
             if (panel && panel.parentNode) panel.parentNode.removeChild(panel);
             const st = document.getElementById(ID + "-style"); if (st && st.parentNode) st.parentNode.removeChild(st);

@@ -222,9 +222,10 @@ const FEATURES = [
   { group: "Chart", key: "badge",       label: "Record badge",        desc: "the “beat record / % of record” tag in the legend" },
   { group: "Chart", key: "recordsList", label: "Records strip",       desc: "your last record runs listed under the chart" },
   { group: "Chart", key: "liveRefresh", label: "Live auto-refresh",   desc: "auto-update the chart as you play; turn off to freeze the view for analysis" },
-  { group: "In-game overlay", key: "overlay",      label: "Show the overlay",  desc: "the bright MPM-record HUD on the game screen" },
-  { group: "In-game overlay", key: "overlayRelic", label: "Relic reminder",    desc: "the “swap to your medal relics” line" },
-  { group: "In-game overlay", key: "overlayGlow",  label: "Bank-it glow",      desc: "pulse the overlay green when you’re above your record" },
+  { group: "In-game overlay", key: "overlay",         label: "Show the overlay",  desc: "the bright MPM-record HUD on the game screen" },
+  { group: "In-game overlay", key: "overlayRelic",    label: "Relic reminder",    desc: "the “swap to your medal relics” line" },
+  { group: "In-game overlay", key: "overlayGlow",     label: "Bank-it glow",      desc: "pulse the overlay green when you’re above your record" },
+  { group: "In-game overlay", key: "overlayCountdown",label: "Revive countdown",  desc: "counts down to the end of each game-minute (when MPM peaks); only shown above your record" },
 ];
 function loadSettings() {
   try { const s = JSON.parse(localStorage.getItem(SETTINGS_KEY) || "null"); return (s && typeof s === "object") ? s : {}; }
