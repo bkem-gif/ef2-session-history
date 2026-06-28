@@ -180,7 +180,9 @@
   </div>
 </div>
 
-<script>
+<script type="module">
+import { deriveRecords, pctOf, medalMult, recordRankOf as recordRankOfShared } from "./shared/records.js";
+import { fmtMedals } from "./shared/format.js";
 const STORAGE_KEY = "__EF_SESSION_HISTORY__";
 // Per-run name/notes live in their OWN key that the recorder never reads or writes, so its
 // periodic writes to STORAGE_KEY can't clobber a rename/note (and there's no read-modify-write
@@ -272,32 +274,12 @@ function toggleSettings() {
   else { panel.style.display = "none"; }
 }
 
-// Your record-setting runs, DERIVED from history: a run is a record when its corrected peak
-// (bestMpm × medal-buff) beats every earlier run's. Newest (= highest) first, capped at 5.
-// If the server's all-time best (bestMedalPerMin) clearly exceeds your best local run — e.g. a
-// record set on mobile — it leads the list as an unattributed "(off-device)" entry. Rebuilt by
-// rebuildRecords() on every store / medal-% change; this is what tags the dropdowns + the strip.
+// Record-run derivation is shared with the recorder (shared/records.js) so the trophy set and the
+// recorder's cleanup-protection set can never drift. RECORDS is the viewer's cached copy; rebuilt
+// on every store / medal-% change — this is what tags the dropdowns + the strip.
 let RECORDS = [];
-function rebuildRecords() {
-  const sorted = (store.runs || []).slice().sort((a, b) => (a.startedAtWall || a.id || 0) - (b.startedAtWall || b.id || 0));
-  let max = 0; const recs = [];
-  for (const r of sorted) {
-    const peak = Number(r.bestMpm) * medalMult(r);
-    if (Number.isFinite(peak) && peak > max) { max = peak; recs.push({ runId: r.id, mpm: peak, at: r.startedAtWall || null }); }
-  }
-  recs.reverse();   // newest (= highest) first
-  const server = (store.account && Number(store.account.bestMedalPerMin) > 0) ? Number(store.account.bestMedalPerMin) : NaN;
-  if (Number.isFinite(server) && (!recs.length || server > recs[0].mpm * 1.05)) {
-    recs.unshift({ runId: null, mpm: server, at: (store.account && store.account.bestMedalPerMinAt) || null });
-  }
-  RECORDS = recs.slice(0, 5);
-}
-// rank of a run among your record-setting runs (1 = current/highest, 2.. = previous), else 0
-function recordRankOf(runId) {
-  if (runId == null) return 0;
-  const i = RECORDS.findIndex(e => e && e.runId === runId);
-  return i < 0 ? 0 : i + 1;
-}
+function rebuildRecords() { RECORDS = deriveRecords(store.runs, store.account, 5); }
+function recordRankOf(runId) { return recordRankOfShared(RECORDS, runId); }
 function fmtShortDate(at) {
   try { const d = new Date(at); return isNaN(d) ? "" : d.toLocaleDateString(undefined, { month: "short", day: "numeric" }); }
   catch (e) { return ""; }
@@ -417,20 +399,7 @@ function fmtNum(v) {
 }
 
 // EF2 magnitude notation for medals: 10^3 = A, 10^6 = B, 10^9 = C, ... Z, then AA, AB, ...
-function tierLetters(n) {
-  let s = "";
-  while (n > 0) { n -= 1; s = String.fromCharCode(65 + (n % 26)) + s; n = Math.floor(n / 26); }
-  return s;
-}
-function fmtMedals(v) {
-  if (!Number.isFinite(v)) return "-";
-  let scaled = v, tier = 0;
-  while (scaled >= 1000) { scaled /= 1000; tier += 1; }
-  let r = Math.round(scaled * 100) / 100;
-  if (r >= 1000) { r /= 1000; tier += 1; }   // rounding / float drift pushed it into the next tier
-  if (tier === 0) return r.toString();
-  return parseFloat(r.toFixed(2)) + tierLetters(tier);
-}
+// tierLetters + fmtMedals are shared with the overlay — see shared/format.js (imported above)
 
 function esc(s) {
   return String(s == null ? "" : s).replace(/[&<>"']/g, c =>
@@ -493,17 +462,7 @@ function metricVal(v) {
 }
 
 // a run's medal-buff % only if it's a valid non-negative integer, else null.
-function pctOf(run) {
-  const v = run ? run.medalPct : undefined;
-  if (v === null || v === undefined || v === "") return null;   // not set (Number(null)===0, so don't coerce)
-  const p = Number(v);
-  return (Number.isInteger(p) && p >= 0) ? p : null;
-}
-// effective medals/min multiplier (1 when there's no valid buff).
-function medalMult(run) {
-  const p = pctOf(run);
-  return p != null ? 1 + p / 100 : 1;
-}
+// pctOf + medalMult are shared with the recorder — see shared/records.js (imported above)
 
 // ---------- Divine Blessing (priest +3 speed buff) inference ----------
 // We can't read the game's buff timer (it's closure-private and tamper-sealed),

@@ -12,23 +12,15 @@
  * persisted store as a fallback). It honours the viewer's settings (shared localStorage key) and
  * the runtime's per-plugin hide/show (data-ef-plugin-overlay). It never sends a move.
  */
+import { fmtMedals } from "./shared/format.js";
+
 export function installSessionOverlay(runtime) {
     const ID = "ef-session-record-overlay";
     const SETTINGS_KEY = "__EF_SESSION_HISTORY_SETTINGS__";
     const STORE_KEY = "__EF_SESSION_HISTORY__";
     const POS_KEY = "__EF_SESSION_OVERLAY_POS__";
     const MEDAL_BUFF_KEY = "__EF_WAVE_TRACKER_MEDAL_BUFF_PERCENT__";   // the Wave Tracker's medal-buff % input
-
-    // number format — matches the viewer / game (1e3 = A, 1e6 = B, 1e9 = C, …)
-    function tierLetters(n) { let s = ""; while (n > 0) { n -= 1; s = String.fromCharCode(65 + (n % 26)) + s; n = Math.floor(n / 26); } return s; }
-    function fmtMedals(v) {
-        if (!Number.isFinite(v)) return "—";
-        let sc = v, t = 0;
-        while (sc >= 1000) { sc /= 1000; t += 1; }
-        let r = Math.round(sc * 100) / 100;
-        if (r >= 1000) { r /= 1000; t += 1; }
-        return t === 0 ? String(r) : (parseFloat(r.toFixed(2)) + tierLetters(t));
-    }
+    // fmtMedals (1e3=A, 1e6=B, …) is shared with the viewer — see shared/format.js
 
     // settings — shared with the viewer; each feature ON unless explicitly disabled
     function readSettings() { try { const s = JSON.parse(localStorage.getItem(SETTINGS_KEY) || "null"); return (s && typeof s === "object") ? s : {}; } catch (e) { return {}; } }

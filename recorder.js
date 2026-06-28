@@ -1,5 +1,6 @@
 // EF2 Session History — recorder.
 //
+// (record-run derivation is shared with the viewer — see shared/records.js)
 // A self-contained, read-only addon to the EF2 Browser Runtime's Wave Tracker.
 // It polls the per-loop sample the tracker publishes on `window.__EF_WAVE_SAMPLE__`,
 // segments your play into runs (one run = one rebirth cycle), downsamples a time
@@ -16,6 +17,8 @@
 // It also observes JSON.parse (read-only) to snapshot a small, identity-free slice
 // of the server-synced `body.user` (currencies, progression, rates, castle, loadout)
 // onto each run, so the viewer can compare runs and show deltas.
+
+import { deriveRecords } from "./shared/records.js";
 
 export function installSessionHistory(runtime) {
     if (typeof window === "undefined" || window.__EF_SESSION_HISTORY_INSTALLED__) {
@@ -176,25 +179,11 @@ export function installSessionHistory(runtime) {
         while (nonRecord > config.maxRuns && dropOldestNonRecord()) { nonRecord--; }
     }
     // Derive the record-setting runs from history: a run is a record when its corrected peak
-    // (bestMpm × medal-buff %) beats every earlier run's. Newest (= highest) first, capped at
-    // MAX_RECORDS. If the server's all-time best (bestMedalPerMin) clearly exceeds the best local
-    // run — e.g. a record set on another device — it leads the list UNATTRIBUTED (runId: null).
-    // These runIds are protected from cleanup so the viewer can always recall them. (The viewer
-    // derives the same list itself, so it tags runs even before this rebuild runs.)
+    // canonical derivation in shared/records.js — the viewer imports the SAME function, so the
+    // cleanup-protection set and the trophy set can never drift. (Records are also protected from
+    // cleanup so the viewer can always recall them.)
     function rebuildRecords() {
-        var sorted = store.runs.slice().sort(function (a, b) { return (a.startedAtWall || a.id || 0) - (b.startedAtWall || b.id || 0); });
-        var max = 0, recs = [];
-        for (var i = 0; i < sorted.length; i++) {
-            var r = sorted[i], pct = Number(r.medalPct);
-            var peak = Number(r.bestMpm) * (Number.isFinite(pct) && pct >= 0 ? 1 + pct / 100 : 1);
-            if (Number.isFinite(peak) && peak > max) { max = peak; recs.push({ runId: r.id, mpm: peak, at: r.startedAtWall || null }); }
-        }
-        recs.reverse();   // newest (= highest) first
-        var acct = store.account || {}, server = Number(acct.bestMedalPerMin);
-        if (Number.isFinite(server) && server > 0 && (!recs.length || server > recs[0].mpm * 1.05)) {
-            recs.unshift({ runId: null, mpm: server, at: acct.bestMedalPerMinAt || null });
-        }
-        store.records = recs.slice(0, MAX_RECORDS);
+        store.records = deriveRecords(store.runs, store.account, MAX_RECORDS);
     }
 
     function startRun(state, nowWallMs) {
