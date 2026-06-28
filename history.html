@@ -281,6 +281,7 @@ let RECORDS = [];
 function rebuildRecords() { RECORDS = deriveRecords(store.runs, store.account, 5); }
 function recordRankOf(runId) { return recordRankOfShared(RECORDS, runId); }
 function fmtShortDate(at) {
+  if (at == null || at === 0) return "";   // falsy/epoch-0 -> blank, not a 1970 label
   try { const d = new Date(at); return isNaN(d) ? "" : d.toLocaleDateString(undefined, { month: "short", day: "numeric" }); }
   catch (e) { return ""; }
 }
@@ -361,7 +362,9 @@ function loadMeta() {
   // (before this decoupled key existed), so existing renames aren't lost.
   if (!meta.__v) {
     for (const r of store.runs) {
-      if ((r.name || r.notes) && !meta[r.id]) { meta[r.id] = {}; if (r.name) meta[r.id].name = r.name; if (r.notes) meta[r.id].notes = r.notes; }
+      // backfill per-field so a partial meta entry (e.g. notes-only) can't lose a store-side name
+      if (r.name && !(meta[r.id] && meta[r.id].name)) { (meta[r.id] = meta[r.id] || {}).name = r.name; }
+      if (r.notes && !(meta[r.id] && meta[r.id].notes)) { (meta[r.id] = meta[r.id] || {}).notes = r.notes; }
     }
     meta.__v = 1;
     saveMeta();
@@ -1374,16 +1377,20 @@ function download(name, text, type) {
   URL.revokeObjectURL(url);
 }
 
+function csvCell(v) {                       // RFC-4180: quote fields containing comma/quote/newline
+  const s = String(v);
+  return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
 function exportCsv() {
   const cols = ["run", "t_sec", "wall_iso", "wave", "maxWave", "mpm", "bestMpm", "wpm", "waveSec", "done", "skip", "rec", "bt"];
-  const rows = [cols.join(",")];
+  const rows = [cols.map(csvCell).join(",")];
   for (const run of store.runs) {
     for (const s of run.samples || []) {
       rows.push([
         run.id, s.t ?? "", s.wall ? new Date(s.wall).toISOString() : "",
         s.wave ?? "", s.maxWave ?? "", s.mpm ?? "", s.bestMpm ?? "",
         s.wpm ?? "", s.waveSec ?? "", s.done ?? "", s.skip ?? "", s.rec ?? "", s.bt ?? ""
-      ].join(","));
+      ].map(csvCell).join(","));
     }
   }
   download("ef2-history.csv", rows.join("\n"), "text/csv");

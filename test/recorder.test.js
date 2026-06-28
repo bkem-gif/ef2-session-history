@@ -155,3 +155,36 @@ test("sample throttle drops a too-soon second sample (mocked clock)", (t) => {
     env.emitSample({ rebirthTimeSec: 103, wave: 503, currentMpm: 1030 }); // 2.6s -> recorded
     assert.equal(env.store().runs[0].samples.length, 2);
 });
+
+test("captures run context (currencies/progression/loadout) from body.user onto the run", () => {
+    install(FAST);
+    env.emitSample({ rebirthTimeSec: 100, wave: 500, currentMpm: 1000 });
+    env.parse({ user: { accuMedal: 1234, maxWave: 900, accuWave: 5, numRevive: 2, tribe: 1 }, castle: { enhance: 7 }, hero: { team: [{ kindNum: 10 }] } });
+    const ctx = env.store().runs[0].ctx;
+    assert.equal(ctx.accuMedal, 1234);
+    assert.equal(ctx.maxWave, 900);
+    assert.equal(ctx.numRevive, 2);
+    assert.equal(ctx.tribe, 1);
+    assert.equal(ctx.castleEnhance, 7);
+    assert.ok(Array.isArray(ctx.team) && ctx.team.length === 1, "captures the hero team");
+});
+
+test("persistent context fields update to the latest sync", () => {
+    install(FAST);
+    env.emitSample({ rebirthTimeSec: 100, wave: 500, currentMpm: 1000 });
+    env.parse({ user: { accuMedal: 100, maxWave: 800 } });
+    env.parse({ user: { accuMedal: 250, maxWave: 950 } });
+    const ctx = env.store().runs[0].ctx;
+    assert.equal(ctx.accuMedal, 250);
+    assert.equal(ctx.maxWave, 950);
+});
+
+test("flushes a pending change to localStorage when the page is hidden", () => {
+    install({ sampleIntervalMs: 0, persistIntervalMs: 999999 }); // throttle normal persists
+    env.emitSample({ rebirthTimeSec: 100, wave: 500, currentMpm: 1000 }); // first persist always writes
+    env.emitSample({ rebirthTimeSec: 110, wave: 600, currentMpm: 1100 }); // within interval -> throttled
+    assert.equal(env.store().runs[0].samples.length, 1, "2nd sample not persisted yet (throttled)");
+    env.document.visibilityState = "hidden";
+    env.document._emit("visibilitychange");
+    assert.equal(env.store().runs[0].samples.length, 2, "hide flushed the pending 2nd sample");
+});
