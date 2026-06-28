@@ -6,7 +6,8 @@
  * a caution to swap to your medal relics, and an "ABOVE RECORD +X%" status with a green glow
  * the moment your live rate beats the record (a pure comparison — no projection).
  *
- * Data is read-only: live medals/min from the Wave Tracker's `wave:sample` event, and the
+ * Data is read-only: live medals/min from the Wave Tracker's `wave:sample` event (corrected by the
+ * Wave Tracker's medal-buff %, exactly as the viewer does), and the
  * record from the recorder's captured account (window.__EF_SESSION_HISTORY_ACCOUNT__, with the
  * persisted store as a fallback). It honours the viewer's settings (shared localStorage key) and
  * the runtime's per-plugin hide/show (data-ef-plugin-overlay). It never sends a move.
@@ -16,6 +17,7 @@ export function installSessionOverlay(runtime) {
     const SETTINGS_KEY = "__EF_SESSION_HISTORY_SETTINGS__";
     const STORE_KEY = "__EF_SESSION_HISTORY__";
     const POS_KEY = "__EF_SESSION_OVERLAY_POS__";
+    const MEDAL_BUFF_KEY = "__EF_WAVE_TRACKER_MEDAL_BUFF_PERCENT__";   // the Wave Tracker's medal-buff % input
 
     // number format — matches the viewer / game (1e3 = A, 1e6 = B, 1e9 = C, …)
     function tierLetters(n) { let s = ""; while (n > 0) { n -= 1; s = String.fromCharCode(65 + (n % 26)) + s; n = Math.floor(n / 26); } return s; }
@@ -40,7 +42,14 @@ export function installSessionOverlay(runtime) {
         return NaN;
     }
 
-    let liveMpm = NaN, record = readRecord();
+    // The Wave Tracker's medal-buff %, same correction the viewer applies. The live sample's
+    // currentMpm is the BASE rate; multiply by (1 + pct/100) to match the server record
+    // (bestMedalPerMin), which already reflects the buff. Record stays raw — mirrors the viewer.
+    function readMedalMult() {
+        try { const p = parseInt(localStorage.getItem(MEDAL_BUFF_KEY) || "", 10); return (Number.isFinite(p) && p >= 0) ? 1 + p / 100 : 1; } catch (e) { return 1; }
+    }
+
+    let liveMpmRaw = NaN, record = readRecord();
 
     function el(tag, css, html) { const e = document.createElement(tag); if (css) e.style.cssText = css; if (html != null) e.innerHTML = html; return e; }
     let panel = null, body = null, minimized = false;
@@ -111,6 +120,7 @@ export function installSessionOverlay(runtime) {
         if (!feat("overlay") || !Number.isFinite(record)) { if (panel) panel.style.display = "none"; return; }
         ensurePanel();
         panel.style.display = "";
+        const liveMpm = Number.isFinite(liveMpmRaw) ? liveMpmRaw * readMedalMult() : NaN;   // apply medal-buff %
         const haveLive = Number.isFinite(liveMpm);
         const above = haveLive && liveMpm > record;
         panel.classList.toggle("above", above);
@@ -129,13 +139,14 @@ export function installSessionOverlay(runtime) {
     // live medals/min from the Wave Tracker (v0.5.3+ nested sample, or a flat shape)
     function mpmOf(s) { if (!s) return NaN; const m = s.medalMpmState ? Number(s.medalMpmState.currentMpm) : Number(s.currentMpm); return Number.isFinite(m) ? m : NaN; }
     const unsub = (runtime && runtime.events && typeof runtime.events.on === "function")
-        ? runtime.events.on("wave:sample", (s) => { try { const m = mpmOf(s); if (Number.isFinite(m)) { liveMpm = m; record = readRecord(); render(); } } catch (e) {} })
+        ? runtime.events.on("wave:sample", (s) => { try { const m = mpmOf(s); if (Number.isFinite(m)) { liveMpmRaw = m; record = readRecord(); render(); } } catch (e) {} })
         : function () {};
 
     const recTimer = setInterval(() => { const r = readRecord(); if (r !== record) { record = r; render(); } }, 4000);
     function onStorage(e) {
         if (e.key === SETTINGS_KEY) { settings = readSettings(); render(); }
         else if (e.key === STORE_KEY) { record = readRecord(); render(); }
+        else if (e.key === MEDAL_BUFF_KEY) { render(); }   // medal-buff % changed in the viewer / tracker
     }
     window.addEventListener("storage", onStorage);
 
