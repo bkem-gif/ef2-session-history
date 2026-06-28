@@ -133,7 +133,8 @@ export function installSessionHistory(runtime) {
         } catch (error) {
             // If we hit the quota, drop the oldest run and try once more.
             if (store.runs.length > 1) {
-                if (!dropOldestNonRecord()) { store.runs.shift(); } // free space, sparing record runs first
+                rebuildRecords();
+            if (!dropOldestNonRecord()) { store.runs.shift(); } // free space, sparing record runs first
                 try {
                     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
                 } catch (retryError) {
@@ -168,26 +169,32 @@ export function installSessionHistory(runtime) {
     }
     // Keep at most config.maxRuns NON-record runs; record runs are always retained on top.
     function trimRuns() {
+        rebuildRecords();   // refresh which runs are records before protecting them
         var prot = recordRunIds();
         var nonRecord = 0;
         for (var i = 0; i < store.runs.length; i++) { if (!prot[store.runs[i].id]) { nonRecord++; } }
         while (nonRecord > config.maxRuns && dropOldestNonRecord()) { nonRecord--; }
     }
-    // A new all-time record V was set at `at`. Attribute it to the run whose recorded peak closely
-    // matches V (the run that set it), prepend it, keep the newest MAX_RECORDS. The record can be
-    // set OFF this device (mobile / native client we never recorded) — then no run matches and we
-    // store it UNATTRIBUTED (runId: null) so the viewer shows the record line/badge without a run.
-    function tagRecordRun(V, at) {
-        if (store.records.length && Math.abs(Number(store.records[0].mpm) - V) < 1) { return; } // dedupe repeated syncs
-        var match = null, bestDelta = Infinity;
-        for (var i = store.runs.length - 1; i >= 0; i--) {            // most-recent first (wins ties)
-            var peak = Number(store.runs[i].bestMpm);
-            if (!Number.isFinite(peak) || peak <= 0) { continue; }
-            var d = Math.abs(peak - V);
-            if (d < bestDelta && d <= V * 0.12) { bestDelta = d; match = store.runs[i]; } // tight: avoid false matches
+    // Derive the record-setting runs from history: a run is a record when its corrected peak
+    // (bestMpm × medal-buff %) beats every earlier run's. Newest (= highest) first, capped at
+    // MAX_RECORDS. If the server's all-time best (bestMedalPerMin) clearly exceeds the best local
+    // run — e.g. a record set on another device — it leads the list UNATTRIBUTED (runId: null).
+    // These runIds are protected from cleanup so the viewer can always recall them. (The viewer
+    // derives the same list itself, so it tags runs even before this rebuild runs.)
+    function rebuildRecords() {
+        var sorted = store.runs.slice().sort(function (a, b) { return (a.startedAtWall || a.id || 0) - (b.startedAtWall || b.id || 0); });
+        var max = 0, recs = [];
+        for (var i = 0; i < sorted.length; i++) {
+            var r = sorted[i], pct = Number(r.medalPct);
+            var peak = Number(r.bestMpm) * (Number.isFinite(pct) && pct >= 0 ? 1 + pct / 100 : 1);
+            if (Number.isFinite(peak) && peak > max) { max = peak; recs.push({ runId: r.id, mpm: peak, at: r.startedAtWall || null }); }
         }
-        store.records.unshift({ runId: match ? match.id : null, mpm: V, at: at || null });
-        if (store.records.length > MAX_RECORDS) { store.records.length = MAX_RECORDS; }
+        recs.reverse();   // newest (= highest) first
+        var acct = store.account || {}, server = Number(acct.bestMedalPerMin);
+        if (Number.isFinite(server) && server > 0 && (!recs.length || server > recs[0].mpm * 1.05)) {
+            recs.unshift({ runId: null, mpm: server, at: acct.bestMedalPerMinAt || null });
+        }
+        store.records = recs.slice(0, MAX_RECORDS);
     }
 
     function startRun(state, nowWallMs) {
@@ -490,15 +497,7 @@ export function installSessionHistory(runtime) {
         acct.at = Date.now();
         window.__EF_SESSION_HISTORY_ACCOUNT__ = acct;   // quick verification handle
         if (changed) {
-            if (!hadBest) {
-                // First sight of your record — it was set before we started tracking, so seed it
-                // unattributed (no run to point at). Genuine NEW highs below get attributed.
-                if (store.records.length === 0) {
-                    store.records.unshift({ runId: null, mpm: best, at: acct.bestMedalPerMinAt || null });
-                }
-            } else if (best > prevBest) {
-                tagRecordRun(best, acct.bestMedalPerMinAt); // a record we OBSERVED -> attribute to its run
-            }
+            rebuildRecords();   // re-derive records (also surfaces an off-device high the runs don't show)
             try {
                 (runtime && runtime.logger ? runtime.logger : console).info(
                     "session-history",

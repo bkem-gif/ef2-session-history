@@ -271,10 +271,30 @@ function toggleSettings() {
   else { panel.style.display = "none"; }
 }
 
-// rank of a run among your record-setting runs (1 = current record, 2.. = previous), else 0
+// Your record-setting runs, DERIVED from history: a run is a record when its corrected peak
+// (bestMpm × medal-buff) beats every earlier run's. Newest (= highest) first, capped at 5.
+// If the server's all-time best (bestMedalPerMin) clearly exceeds your best local run — e.g. a
+// record set on mobile — it leads the list as an unattributed "(off-device)" entry. Rebuilt by
+// rebuildRecords() on every store / medal-% change; this is what tags the dropdowns + the strip.
+let RECORDS = [];
+function rebuildRecords() {
+  const sorted = (store.runs || []).slice().sort((a, b) => (a.startedAtWall || a.id || 0) - (b.startedAtWall || b.id || 0));
+  let max = 0; const recs = [];
+  for (const r of sorted) {
+    const peak = Number(r.bestMpm) * medalMult(r);
+    if (Number.isFinite(peak) && peak > max) { max = peak; recs.push({ runId: r.id, mpm: peak, at: r.startedAtWall || null }); }
+  }
+  recs.reverse();   // newest (= highest) first
+  const server = (store.account && Number(store.account.bestMedalPerMin) > 0) ? Number(store.account.bestMedalPerMin) : NaN;
+  if (Number.isFinite(server) && (!recs.length || server > recs[0].mpm * 1.05)) {
+    recs.unshift({ runId: null, mpm: server, at: (store.account && store.account.bestMedalPerMinAt) || null });
+  }
+  RECORDS = recs.slice(0, 5);
+}
+// rank of a run among your record-setting runs (1 = current/highest, 2.. = previous), else 0
 function recordRankOf(runId) {
-  if (!Array.isArray(store.records) || runId == null) return 0;
-  const i = store.records.findIndex(e => e && e.runId === runId);
+  if (runId == null) return 0;
+  const i = RECORDS.findIndex(e => e && e.runId === runId);
   return i < 0 ? 0 : i + 1;
 }
 function fmtShortDate(at) {
@@ -287,7 +307,7 @@ function fmtShortDate(at) {
 function renderRecordsBar() {
   const el = document.getElementById("recordsBar");
   if (!el) return;
-  const recs = (Array.isArray(store.records) ? store.records : []).filter(e => e && Number(e.mpm) > 0);
+  const recs = RECORDS.filter(e => e && Number(e.mpm) > 0);
   if (!recs.length || !feat("recordsList")) { el.innerHTML = ""; el.style.display = "none"; return; }
   el.style.display = "";
   const items = recs.map((e, i) => {
@@ -347,6 +367,7 @@ function load() {
     if (c && c.castleGoldSum == null && c.castleLevelSum != null) { c.castleGoldSum = c.castleLevelSum; }
   }
   loadMeta();
+  rebuildRecords();
 }
 
 function saveMeta() { try { localStorage.setItem(META_KEY, JSON.stringify(meta)); } catch (e) {} }
@@ -600,11 +621,13 @@ function applyMedalEdit(commit) {
   const p = v === "" ? null : parseInt(v, 10);
   run.medalPct = (p !== null && Number.isFinite(p) && p >= 0) ? p : null;
   saveStore();
+  rebuildRecords();              // a medal-% edit can change which runs are records
   const m = medalMult(run);
   document.getElementById("medalMult").textContent = m !== 1 ? "×" + (Math.round(m * 100) / 100) : "";
   drawChart();
   renderSummary();
-  if (commit) syncMedalInput(run);
+  renderRecordsBar();
+  if (commit) { syncMedalInput(run); renderRunSelect(); }   // refresh dropdown 🏆 tags on commit
 }
 
 // Rename / note the selected run. Both save on every keystroke (so they survive a reload),
@@ -712,9 +735,11 @@ function drawChart() {
   chartHasGlow = false;
   const recordMpm = (!multi && store.account && Number(store.account.bestMedalPerMin) > 0)
     ? Number(store.account.bestMedalPerMin) : NaN;
-  const recordEntry = (Array.isArray(store.records) && store.records.length) ? store.records[0] : null;
-  const ghostRun = (recordEntry && recordEntry.runId != null && (!run || run.id !== recordEntry.runId))
-    ? store.runs.find(r => r.id === recordEntry.runId) : null;
+  // ghost = your best LOCAL record run (skip an off-device entry; don't race the run you're viewing)
+  const ghostTop = RECORDS.find(e => e && e.runId != null);
+  const ghostRun = (ghostTop && (!run || run.id !== ghostTop.runId))
+    ? store.runs.find(r => r.id === ghostTop.runId) : null;
+  const recordAt = (store.account && store.account.bestMedalPerMinAt) || (RECORDS[0] && RECORDS[0].at) || null;
   // keep the record line on-screen even when this run's peak is below it (only if it's shown)
   const wantRecordY = Number.isFinite(recordMpm) && (feat("recordLine") || feat("glow"));
   axisMax.left = niceCeil(Math.max(axisMax.left, 1, wantRecordY ? recordMpm : 0));
@@ -887,7 +912,7 @@ function drawChart() {
   if (Number.isFinite(recordMpm) && recordMpm <= axisMax.left && feat("recordLine")) {
     const ry = yPix(recordMpm, "left");
     let when = "";
-    try { if (recordEntry && recordEntry.at) { const d = new Date(recordEntry.at); if (!isNaN(d)) when = " · " + d.toLocaleDateString(); } } catch (e) {}
+    try { if (recordAt) { const d = new Date(recordAt); if (!isNaN(d)) when = " · " + d.toLocaleDateString(); } } catch (e) {}
     ctx.save();
     ctx.strokeStyle = "rgba(255,242,170,1)"; ctx.lineWidth = 2.5; ctx.setLineDash([8, 5]);
     ctx.shadowColor = "rgba(255,228,120,0.65)"; ctx.shadowBlur = 6;
@@ -907,8 +932,7 @@ function drawChart() {
     let recordBadge = "";
     const mpmPk = (series.find(s => s.key === "mpm") || {}).peak;
     if (Number.isFinite(recordMpm) && mpmPk && Number.isFinite(mpmPk.y) && feat("badge")) {
-      const rank = (Array.isArray(store.records) && run)
-        ? store.records.findIndex(e => e && e.runId === run.id) + 1 : 0;
+      const rank = run ? recordRankOf(run.id) : 0;
       if (rank >= 1) {
         recordBadge = `<span class="item" style="color:#ffe08a;font-weight:700">&#x1F3C6; Record #${rank}${rank === 1 ? " (current)" : ""}</span>`;
       } else if (mpmPk.y >= recordMpm) {
