@@ -17,6 +17,7 @@ npm run coverage    # node --test --experimental-test-coverage
 | `test/overlay.test.js` | `overlay.js` — the in‑game HUD | DOM‑shim: record/settings gating, medal‑% correction, above‑record class + status %, glow toggle, the `:59` countdown zones (early/near/go), staleness hide, storage‑event reactivity, detach teardown. |
 | `test/records.test.js` | `shared/records.js` | Canonical record derivation: `pctOf` (integer guard), `medalMult`, `deriveRecords` (running‑max, off‑device band, cap, buff‑affects‑ordering), `recordRankOf`. |
 | `test/format.test.js` | `shared/format.js` | `tierLetters`, `fmtMedals` (tier rollover, non‑finite, sign‑safe negatives). |
+| `test/viewer-core.test.js` | `viewer-core.js` | Viewer chart‑math: `fmtShortDate`, `niceCeil`/`niceCeilTime`, `metricVal`, and the Divine Blessing game‑speed/buff inference (`btOf`, `deriveSpeedIntervals`, `detectBuffDown`, `inAnySpan`). |
 
 ## Architecture
 
@@ -32,11 +33,6 @@ drive inputs → assert the store / DOM → `detach()` + `restore()`. Time‑dep
 
 `shared/records.js` and `shared/format.js` are imported by the recorder, the overlay, **and**
 the viewer (`history.html` is an ES module) so the record set, the trophies, and number formatting
-can never drift between surfaces — a past divergence here is what the suite now guards.
-
-## Known follow‑up (not yet covered)
-
-The viewer's pure chart‑math (`niceCeil`/`niceCeilTime`, `metricVal`, `deriveSpeedIntervals`,
-`detectBuffDown`, `inAnySpan`, `feat`) is still inline in `history.html` and not unit‑tested.
-Extracting it into a sibling `viewer-core.js` module (imported back by the viewer) is the next
-hardening step; the chart *rendering* (canvas/DOM) stays integration‑verified via the preview.
+can never drift between surfaces — a past divergence here is what the suite now guards. The
+viewer's pure chart‑math lives in `viewer-core.js` (imported by `history.html`) and is unit‑tested
+directly; only the chart *rendering* (canvas/DOM) stays integration‑verified via the preview.

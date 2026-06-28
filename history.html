@@ -183,6 +183,7 @@
 <script type="module">
 import { deriveRecords, pctOf, medalMult, recordRankOf as recordRankOfShared } from "./shared/records.js";
 import { fmtMedals } from "./shared/format.js";
+import { fmtShortDate, niceCeil, niceCeilTime, metricVal, deriveSpeedIntervals, detectBuffDown, inAnySpan } from "./viewer-core.js";
 const STORAGE_KEY = "__EF_SESSION_HISTORY__";
 // Per-run name/notes live in their OWN key that the recorder never reads or writes, so its
 // periodic writes to STORAGE_KEY can't clobber a rename/note (and there's no read-modify-write
@@ -280,11 +281,7 @@ function toggleSettings() {
 let RECORDS = [];
 function rebuildRecords() { RECORDS = deriveRecords(store.runs, store.account, 5); }
 function recordRankOf(runId) { return recordRankOfShared(RECORDS, runId); }
-function fmtShortDate(at) {
-  if (at == null || at === 0) return "";   // falsy/epoch-0 -> blank, not a 1970 label
-  try { const d = new Date(at); return isNaN(d) ? "" : d.toLocaleDateString(undefined, { month: "short", day: "numeric" }); }
-  catch (e) { return ""; }
-}
+// fmtShortDate is in viewer-core.js (imported above)
 
 // the strip of your last record runs under the chart. Records set on ANOTHER device (mobile /
 // native client we never recorded) have no run and are shown, labelled, but not clickable.
@@ -438,137 +435,7 @@ function hasData() {
 }
 
 // ---------- charting ----------
-function niceCeil(value) {
-  if (value <= 0) return 1;
-  const exp = Math.floor(Math.log10(value));
-  const base = 10 ** exp;
-  const frac = value / base;
-  const nice = frac <= 1 ? 1 : frac <= 2 ? 2 : frac <= 5 ? 5 : 10;
-  return nice * base;
-}
-
-// The x-axis (rebirth time) needs a TIGHTER ceiling than the y-axes. niceCeil's
-// coarse 1/2/5 steps stretch a ~205-min run all the way to 500 (frac 2.05 -> 5),
-// wasting more than half the width. Round up to a fine, clean minute step instead,
-// leaving only a little headroom so the last point isn't flush against the edge.
-function niceCeilTime(value) {
-  if (value <= 0) return 1;
-  const base = 10 ** Math.floor(Math.log10(value));   // 1, 10, 100 …
-  const step = base / 5;                               // fine sub-tick: 0.2, 2, 20 …
-  return Math.ceil((value * 1.05) / step) * step;      // ~5% headroom, snapped up to the step
-}
-
-// null / "" / missing -> NaN, so a not-yet-measured value is a gap on the line
-// and "-" in the tooltip, never a real 0.
-function metricVal(v) {
-  return (v === null || v === undefined || v === "") ? NaN : Number(v);
-}
-
-// a run's medal-buff % only if it's a valid non-negative integer, else null.
-// pctOf + medalMult are shared with the recorder — see shared/records.js (imported above)
-
-// ---------- Divine Blessing (priest +3 speed buff) inference ----------
-// We can't read the game's buff timer (it's closure-private and tamper-sealed),
-// but the in-game frame counter `bt` advances at +1 per 60 fps logic tick, and the
-// game runs those ticks faster at higher game speed. So the game-speed multiplier
-// is gameSpeed ≈ Δframes / (60 × ΔwallSeconds). Divine Blessing adds a discrete +3
-// to that multiplier for 120 s, so an unusually-LOW speed plateau = buff down.
-function btOf(s) {
-  const v = s ? s.bt : undefined;
-  if (v === null || v === undefined || v === "") return null;
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
-}
-
-// Per-interval game-speed multiplier between consecutive samples. Intervals that
-// span a battle reset (frame counter drops), a too-short gap, or an implausible
-// rate are dropped. x0/x1 are rebirth-time minutes (the chart's x units).
-const RELOAD_GAP_SEC = 20;   // a frame-counter reset across a wall gap this big = a reload (vs a stage change)
-const MAX_GAP_SEC = 300;     // ignore derived speed across very long idle / offline gaps
-function deriveSpeedIntervals(samples) {
-  const out = [];
-  let pendingReload = false;
-  for (let i = 1; i < samples.length; i++) {
-    const a = samples[i - 1], b = samples[i];
-    const bt0 = btOf(a), bt1 = btOf(b);
-    if (bt0 === null || bt1 === null) continue;
-    const dframes = bt1 - bt0;
-    const dwall = (Number(b.wall) - Number(a.wall)) / 1000;
-    if (!(dframes >= 0)) {                                   // frame counter reset
-      if (dwall > RELOAD_GAP_SEC) pendingReload = true;      // ...across a gap = a reload (Divine Blessing resets)
-      continue;
-    }
-    if (!(dwall > 0.5) || dwall > MAX_GAP_SEC) continue;     // bad / long-gap interval
-    const speed = dframes / (60 * dwall);
-    if (!Number.isFinite(speed) || speed > 100) continue;   // clock jump etc.
-    out.push({ x0: (Number(a.t) || 0) / 60, x1: (Number(b.t) || 0) / 60, speed, afterReload: pendingReload });
-    pendingReload = false;
-  }
-  return out;
-}
-
-const BATTLE_SPEED_FLOOR = 0.5;   // below this = not in an active battle (menu/idle)
-const MIN_PLATEAU_GAP = 2;        // the +3 buff must show at least this much spread
-// Classify in-battle intervals as buff-up vs buff-down by splitting the two speed
-// plateaus (which sit ~3 apart) at their midpoint, smoothing single-sample
-// flicker, then merging contiguous down intervals into spans. Returns ok:false
-// when there's no `bt` data or the buff state doesn't visibly vary (draw nothing
-// rather than guess).
-function detectBuffDown(intervals) {
-  const battle = intervals.filter(iv => iv.speed >= BATTLE_SPEED_FLOOR);
-  if (battle.length < 4) return { ok: false, spans: [] };
-  const sorted = battle.map(iv => iv.speed).slice().sort((a, b) => a - b);
-  const pct = q => sorted[Math.max(0, Math.min(sorted.length - 1, Math.round(q * (sorted.length - 1))))];
-  const lo = pct(0.20), hi = pct(0.80);
-  if (hi - lo < MIN_PLATEAU_GAP) return { ok: false, spans: [] };
-  const thresh = lo + (hi - lo) / 2;
-  const sp = battle.map(iv => iv.speed);
-  // Drift-aware split: a single run-wide threshold can't separate on/off once
-  // cumulative base drift (stat growth) reaches the +3 buff magnitude. Classify each
-  // interval against a LOCAL floor — the min over a window spanning a buff cycle — so
-  // the boundary follows the moving baseline. Where that window sees only one plateau
-  // (run edges, or a long single-state stretch) fall back to the global threshold, so
-  // a one-sided window never invents a down-state.
-  const W = 9; // ±9 intervals (~3 min at 10s/sample) — wide enough to span a cycle
-  const raw = sp.map((v, i) => {
-    let mn = Infinity, mx = -Infinity;
-    for (let j = Math.max(0, i - W); j <= Math.min(sp.length - 1, i + W); j++) {
-      if (sp[j] < mn) mn = sp[j];
-      if (sp[j] > mx) mx = sp[j];
-    }
-    return (mx - mn >= MIN_PLATEAU_GAP) ? v < mn + MIN_PLATEAU_GAP / 2 : v < thresh;
-  });
-  // median-of-3 smoothing kills single-sample flicker
-  const down = raw.map((v, i) => {
-    const a = i > 0 ? raw[i - 1] : v, c = i < raw.length - 1 ? raw[i + 1] : v;
-    return (a ? 1 : 0) + (v ? 1 : 0) + (c ? 1 : 0) >= 2;
-  });
-  // After a reload, Divine Blessing resets (it doesn't persist across loads), so the
-  // initial unbuffed stretch isn't a real lapse — don't flag it until the buff is seen
-  // UP again. Stage changes within a session keep the buff timer, so only reloads count.
-  let suppressing = false;
-  for (let i = 0; i < battle.length; i++) {
-    if (battle[i].afterReload) suppressing = true;
-    if (!down[i]) suppressing = false;        // buff seen up -> resume flagging real lapses
-    else if (suppressing) down[i] = false;    // suppress the post-reload leading-down
-  }
-  // merge contiguous down intervals into spans, but don't bridge a time gap
-  const spans = [];
-  const EPS = 0.05; // minutes (~3 s) tolerance for "adjacent"
-  for (let i = 0; i < battle.length; i++) {
-    if (!down[i]) continue;
-    const start = battle[i].x0;
-    let end = battle[i].x1;
-    while (i + 1 < battle.length && down[i + 1] && Math.abs(battle[i + 1].x0 - end) <= EPS) { i++; end = battle[i].x1; }
-    spans.push({ x0: start, x1: end });
-  }
-  return { ok: true, spans, thresh };
-}
-
-function inAnySpan(xMin, spans) {
-  for (const sp of spans) if (xMin >= sp.x0 - 1e-9 && xMin <= sp.x1 + 1e-9) return true;
-  return false;
-}
+// Axis helpers + Divine Blessing (game-speed/buff) inference are in viewer-core.js (imported above)
 
 function saveStore() {
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(store)); } catch (e) {}
