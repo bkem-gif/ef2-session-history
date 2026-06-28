@@ -1,0 +1,12 @@
+{
+  "name": "ef2-session-history",
+  "version": "1.0.0",
+  "description": "EF2 session-history plugin — recorder, viewer, and in-game MPM overlay",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "test": "node --test",
+    "test:watch": "node --test --watch",
+    "coverage": "node --test --experimental-test-coverage"
+  }
+}
